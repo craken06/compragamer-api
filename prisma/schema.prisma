@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum StockStatus {
+  disponible
+  a_pedido
+  sin_stock
+
+  @@map("stock_status_enum")
+}
+
+model Category {
+  id         Int      @id @default(autoincrement())
+  slug       String   @unique
+  name       String
+  specSchema Json?    @map("spec_schema")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  products   Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id           Int            @id @default(autoincrement())
+  categoryId   Int            @map("category_id")
+  category     Category       @relation(fields: [categoryId], references: [id])
+  brand        String
+  name         String
+  sku          String?        @unique
+  price        Decimal        @db.Decimal(12, 2)
+  currency     String         @default("ARS")
+  stockStatus  StockStatus    @default(disponible) @map("stock_status")
+  description  String?
+  specs        Json           @default("{}")
+  datasheetUrl String?        @map("datasheet_url")
+  active       Boolean        @default(true)
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  images       ProductImage[]
+
+  @@map("products")
+}
+
+model ProductImage {
+  id        Int     @id @default(autoincrement())
+  productId Int     @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  altText   String? @map("alt_text")
+  order     Int     @default(0) @map("order")
+
+  @@map("product_images")
+}
