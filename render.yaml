@@ -10,3 +10,15 @@ services:
         sync: false
       - key: NODE_VERSION
         value: 20.14.9
+      # Dominios del frontend permitidos por CORS, separados por coma. Ej: https://auryx.com,https://www.auryx.com
+      - key: CORS_ORIGINS
+        sync: false
+      # Clave para POST/PUT/DELETE de productos (header x-admin-key). Render la genera sola.
+      - key: ADMIN_API_KEY
+        generateValue: true
+      # Cotización del dólar: tipo de dólar a usar (oficial, bolsa, blue, contadoconliqui, mayorista, tarjeta)
+      - key: USD_ARS_CASA
+        value: oficial
+      # Opcional: fijar la cotización a mano (pisa la cotización en vivo). Dejar vacío para usar la automática.
+      # - key: USD_ARS_RATE_OVERRIDE
+      #   value: "1500"
