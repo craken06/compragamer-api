@@ -16,7 +16,7 @@ export function corsOptions() {
       cb(null, ok);
     },
     methods: ['GET', 'HEAD', 'OPTIONS'],
-    allowedHeaders: ['Content-Type'],
+    allowedHeaders: ['Content-Type', 'ngrok-skip-browser-warning'], // este último lo manda el frontend para saltar el aviso de ngrok
     maxAge: 86400,
   };
 }
