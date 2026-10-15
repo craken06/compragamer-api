@@ -10,7 +10,9 @@
     "prisma:generate": "prisma generate",
     "prisma:pull": "prisma db pull",
     "prisma:migrate": "prisma migrate deploy",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "test": "node -r ts-node/register --test test/engine.test.ts test/calculators-auth.test.ts test/orders.test.ts",
+    "migrate:manual": "node scripts/migrate.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.4",

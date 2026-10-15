@@ -11,4 +11,5 @@ export class UpdateProductDto implements Partial<CreateProductDto> {
   description?: string;
   specs?: Record<string, any>;
   datasheetUrl?: string;
+  active?: boolean; // false = se oculta de la tienda sin borrarlo
 }

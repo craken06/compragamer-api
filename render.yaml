@@ -5,17 +5,37 @@ services:
     plan: free
     buildCommand: npm install && npm run build
     startCommand: npm start
+    healthCheckPath: /exchange-rate
     envVars:
       - key: DATABASE_URL
         sync: false
+      # Versión de Node (tiene que existir: "20" usa la última 20.x)
       - key: NODE_VERSION
-        value: 20.14.9
-      # Dominios del frontend permitidos por CORS, separados por coma. Ej: https://auryx.com,https://www.auryx.com
+        value: "20"
+      # Dominios del frontend permitidos por CORS, separados por coma. Ej: https://craken06.github.io
       - key: CORS_ORIGINS
         sync: false
-      # Clave para POST/PUT/DELETE de productos (header x-admin-key). Render la genera sola.
+      # Clave para scripts/herramientas (header x-admin-key). Render la genera sola.
       - key: ADMIN_API_KEY
         generateValue: true
+      # Login del panel de administración
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_USER
+        sync: false
+      # Generar con: node scripts/hash-password.js "tu contraseña"
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      # Mercado Pago (Checkout Pro). Sin MP_ACCESS_TOKEN los pedidos se guardan como cotización.
+      - key: MP_ACCESS_TOKEN
+        sync: false
+      - key: MP_WEBHOOK_SECRET
+        sync: false
+      # Adónde vuelve el cliente después de pagar, y URL pública de esta API (para el webhook)
+      - key: FRONTEND_URL
+        value: https://craken06.github.io/auryx-frontend
+      - key: API_PUBLIC_URL
+        sync: false
       # Cotización del dólar: tipo de dólar a usar (oficial, bolsa, blue, contadoconliqui, mayorista, tarjeta)
       - key: USD_ARS_CASA
         value: oficial

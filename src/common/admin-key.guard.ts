@@ -1,26 +1,38 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { timingSafeEqual } from 'crypto';
+import { verifyToken } from '../auth/token';
 
 /**
- * Protege los endpoints que escriben (POST / PUT / DELETE).
- * Se envía la clave en el header `x-admin-key`, y se compara con ADMIN_API_KEY.
- * Si ADMIN_API_KEY no está definida, la escritura queda deshabilitada (falla cerrada).
+ * Protege los endpoints de administración (escrituras y lecturas privadas).
+ * Acepta cualquiera de las dos credenciales:
+ *  - `Authorization: Bearer <token>` que devuelve POST /auth/login (panel de administración), firmado con JWT_SECRET.
+ *  - `x-admin-key: <ADMIN_API_KEY>` (scripts y herramientas).
+ * Si no hay ninguna de las dos configuradas en el servidor, falla cerrado.
  */
 @Injectable()
 export class AdminKeyGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const expected = process.env.ADMIN_API_KEY;
-    if (!expected) {
-      throw new ForbiddenException('Escritura deshabilitada: falta configurar ADMIN_API_KEY en el servidor');
+    const apiKey = process.env.ADMIN_API_KEY;
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!apiKey && !jwtSecret) {
+      throw new ForbiddenException('Administración deshabilitada: falta configurar ADMIN_API_KEY o JWT_SECRET en el servidor');
     }
     const req = context.switchToHttp().getRequest();
-    const provided = String(req.headers['x-admin-key'] ?? '');
 
-    const a = Buffer.from(provided);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      throw new UnauthorizedException('Clave de administración inválida');
+    const auth = String(req.headers['authorization'] ?? '');
+    if (jwtSecret && auth.startsWith('Bearer ')) {
+      const payload = verifyToken(auth.slice(7).trim(), jwtSecret);
+      if (!payload) throw new UnauthorizedException('Sesión vencida o inválida: volvé a iniciar sesión');
+      req.admin = payload.sub;
+      return true;
     }
-    return true;
+
+    const provided = String(req.headers['x-admin-key'] ?? '');
+    if (apiKey && provided) {
+      const a = Buffer.from(provided);
+      const b = Buffer.from(apiKey);
+      if (a.length === b.length && timingSafeEqual(a, b)) return true;
+    }
+    throw new UnauthorizedException('Credenciales de administración inválidas');
   }
 }

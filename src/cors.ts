@@ -17,8 +17,9 @@ function toOrigin(value: string): string {
  * CORS: en producción se definen los dominios del frontend en CORS_ORIGINS
  * (separados por coma). Ej: https://auryx.com,https://usuario.github.io
  * Si no está definida (desarrollo), se aceptan solo orígenes locales.
- * Desde un navegador solo se permite LEER: las escrituras se hacen con ADMIN_API_KEY
- * desde scripts/herramientas, que no pasan por CORS.
+ * Desde un navegador se permite leer y los POST públicos (compatibilidad, calculadoras,
+ * pedidos, contacto). La administración usa Authorization / x-admin-key, que no se
+ * habilitan acá: el panel de administración llama a la API desde su propio servidor.
  */
 export function allowedOrigins(): string[] {
   return (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).map(toOrigin);
@@ -38,7 +39,7 @@ export function corsOptions() {
       }
       cb(null, ok);
     },
-    methods: ['GET', 'HEAD', 'OPTIONS'],
+    methods: ['GET', 'HEAD', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'ngrok-skip-browser-warning'], // este último lo manda el frontend para saltar el aviso de ngrok
     maxAge: 86400,
   };

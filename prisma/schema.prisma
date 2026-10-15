@@ -48,6 +48,78 @@ model Product {
   @@map("products")
 }
 
+// Reglas del motor de compatibilidad (ver src/compatibility/engine.ts).
+// source_category = "_param" guarda parámetros globales (check_key = nombre, condition.value = valor).
+model CompatibilityRule {
+  id             Int      @id @default(autoincrement())
+  sourceCategory String   @map("source_category")
+  targetCategory String   @map("target_category")
+  checkKey       String   @map("check_key")
+  priority       Int      @default(100)
+  condition      Json
+  resultType     String   @map("result_type") // bad | warning (o "param")
+  message        String   @default("")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("compatibility_rules")
+}
+
+enum OrderStatus {
+  pendiente_pago
+  pagado
+  rechazado
+  cancelado
+  cotizacion
+
+  @@map("order_status_enum")
+}
+
+model Order {
+  id            Int         @id @default(autoincrement())
+  publicId      String      @unique @map("public_id")
+  status        OrderStatus @default(pendiente_pago)
+  customerName  String      @map("customer_name")
+  customerEmail String      @map("customer_email")
+  customerPhone String?     @map("customer_phone")
+  notes         String?
+  totalArs      Decimal     @map("total_ars") @db.Decimal(14, 2)
+  usdArsRate    Decimal     @map("usd_ars_rate") @db.Decimal(12, 4)
+  mpPreferenceId String?    @map("mp_preference_id")
+  mpPaymentId   String?     @map("mp_payment_id")
+  mpStatus      String?     @map("mp_status")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  items         OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id           Int     @id @default(autoincrement())
+  orderId      Int     @map("order_id")
+  order        Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    Int     @map("product_id")
+  productName  String  @map("product_name")
+  quantity     Int
+  unitPriceArs Decimal @map("unit_price_ars") @db.Decimal(14, 2)
+
+  @@map("order_items")
+}
+
+model ContactMessage {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String
+  phone     String?
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("contact_messages")
+}
+
 model ProductImage {
   id        Int     @id @default(autoincrement())
   productId Int     @map("product_id")

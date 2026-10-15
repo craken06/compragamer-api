@@ -54,6 +54,21 @@ export class ProductsController {
     });
   }
 
+  // --- Imágenes (tabla product_images): URL pública + texto alternativo + orden ---
+  @Post(':id/images')
+  @UseGuards(AdminKeyGuard)
+  addImage(@Param('id', ParseIntPipe) id: number, @Body() body: { url: string; altText?: string; order?: number }) {
+    const url = String(body?.url ?? '').trim();
+    if (!/^https:\/\/\S+$/i.test(url)) throw new BadRequestException('La imagen tiene que ser una URL https.');
+    return this.productsService.addImage(id, url, body?.altText, Number(body?.order) || 0);
+  }
+
+  @Delete(':id/images/:imageId')
+  @UseGuards(AdminKeyGuard)
+  removeImage(@Param('id', ParseIntPipe) id: number, @Param('imageId', ParseIntPipe) imageId: number) {
+    return this.productsService.removeImage(id, imageId);
+  }
+
   // OJO: esta ruta ('all') tiene que ir ANTES de ':id',
   // sino Nest interpreta "all" como un id y explota
   @Delete('all')

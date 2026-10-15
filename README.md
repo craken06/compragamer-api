@@ -1,6 +1,6 @@
 # Compragamer API — Backend real (NestJS + Prisma)
 
-Este es el backend "de verdad" de la plataforma (la tienda + configurador + calculadoras que se definieron en la arquitectura del proyecto). Se conecta a la **misma base de datos Postgres** que ya venís usando con la app de carga de productos (`compragamer-admin`) — no crea tablas nuevas, lee y escribe sobre `categories`, `products` y `product_images` que ya existen.
+Este es el backend "de verdad" de la plataforma (la tienda + configurador + calculadoras que se definieron en la arquitectura del proyecto). Trabaja sobre la base Postgres (Neon): `categories`, `products`, `product_images` y las tablas que crea `scripts/migrate.js` (`compatibility_rules`, `orders`, `order_items`, `contact_messages`). El panel `compragamer-admin` habla con esta API.
 
 Corre en un **puerto distinto** (3001 por defecto) al de la app de carga (3000), así podés tener las dos corriendo al mismo tiempo sin conflicto mientras vas migrando.
 
@@ -93,15 +93,56 @@ Ejemplo de body para `POST /products`:
 
 ---
 
-## Cómo sigue el proyecto desde acá
+### Compatibilidad, calculadoras, pedidos y contacto (públicos)
+| Método | Ruta | Qué hace |
+|---|---|---|
+| GET | `/compatibility/rules` | Parámetros del motor (temperatura mínima de diseño, márgenes) y reglas activas |
+| POST | `/compatibility/evaluate` | Veredicto ✓/⚠/✕ de varias opciones a la vez (inversores, baterías, cables/protecciones DC) |
+| POST | `/calculators/consumption` \| `cost` \| `savings` \| `orientation` | Calculadoras con campo `warnings` |
+| POST | `/orders` | Crea el pedido con precios del servidor y devuelve el link de pago de Mercado Pago |
+| GET | `/orders/:publicId` | Estado del pedido (página de vuelta del pago) |
+| POST | `/payments/webhook` | Notificaciones de Mercado Pago (consulta el pago a MP antes de marcarlo pagado) |
+| POST | `/contact` | Formulario de contacto (y Botón de arrepentimiento) |
 
-Con esta API corriendo, el frontend de la tienda/configurador (que todavía no construimos) le va a pegar a estos endpoints en vez de hablar directo con la base. Los próximos módulos naturales a agregar acá, siguiendo el documento de arquitectura, son:
+### Administración (requieren `Authorization: Bearer <token>` o `x-admin-key`)
+| Método | Ruta | Qué hace |
+|---|---|---|
+| POST | `/auth/login` | `{ user, password }` -> token de 12 h (usuario único: `ADMIN_USER` / `ADMIN_PASSWORD_HASH`) |
+| GET | `/admin/products`, `/admin/products/incomplete` | Todos los productos (incl. ocultos) y los que tienen specs incompletos |
+| POST/DELETE | `/products/:id/images[/:imageId]` | Imágenes por URL https (tabla `product_images`) |
+| GET | `/admin/orders`, `/admin/contact` | Pedidos y mensajes |
+| GET/POST/PUT | `/admin/compatibility-rules[/:id]` | Reglas del motor como datos |
 
-- **`compatibility` module** → el motor de compatibilidad (lee `CompatibilityRule` y evalúa productos entre sí)
-- **`calculators` module** → las 4 calculadoras públicas, como funciones puras expuestas por endpoint
-- **`cart` / `orders` module** → carrito y resumen de pedido (sin pago real en v1)
+## Motor de compatibilidad
 
-La app `compragamer-admin` (Express simple) puede seguir usándose como herramienta rápida de carga mientras tanto, o migrarse para que hable con esta API en vez de conectarse directo a Postgres — lo que prefieras.
+`src/compatibility/engine.ts` (funciones puras). Calcula métricas del arreglo y las compara con reglas guardadas
+en `compatibility_rules` (`metric`, `op`, `ref`/`value`, `factor`, `requires`, `unless`): cambiar un criterio es
+editar una fila desde el panel de administración, sin tocar código. Si la tabla no existe usa `DEFAULT_RULES`.
+
+- ✕ **No compatible**: Voc en frío > tensión máx.; Isc > cortocircuito máx. por MPPT; potencia > máx. FV; batería fuera de rango.
+- ⚠ **Revisar**: Voc a menos del 3 % del máximo; Imp > corriente de operación (recorte); Vmp en calor < mínimo MPPT;
+  DC/AC > 1,3; descarga de baterías < potencia del inversor; faltan datos; cables/protecciones < 1,25 × Isc.
+- Voc en frío = Voc × serie × (1 + coef_temp_voc/100 × (Tmín − 25)), Tmín por defecto −10 °C (el usuario la puede cambiar).
+- Microinversores (`es_microinversor`): se evalúa un panel por equipo.
+
+## Migraciones y scripts
+
+Todos simulan por defecto y sólo escriben con `--apply`:
+
+```bash
+node scripts/migrate.js                          # tablas compatibility_rules, orders, order_items, contact_messages + reglas iniciales
+node scripts/backfill-baterias-paneles-micro.js  # tensión/corriente de baterías, tecnología de paneles, Enphase IQ8MC
+node scripts/backfill-inversores-y-categorias.js # (ya aplicado el 2026-10-15)
+node scripts/hash-password.js "contraseña"       # valor de ADMIN_PASSWORD_HASH
+npm test                                         # tests del motor, calculadoras, login y pedidos (sin base ni red)
+```
+
+## Mercado Pago
+
+1. Crear la aplicación en https://www.mercadopago.com.ar/developers y copiar el *Access Token* (primero el de prueba).
+2. Cargar `MP_ACCESS_TOKEN`, `FRONTEND_URL` y `API_PUBLIC_URL`.
+3. En *Webhooks* de la aplicación: URL `<API_PUBLIC_URL>/payments/webhook`, evento **Pagos**; copiar la clave secreta en `MP_WEBHOOK_SECRET`.
+4. Probar con las tarjetas de prueba de MP antes de pasar a las credenciales productivas.
 
 ---
 
