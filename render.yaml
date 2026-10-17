@@ -26,6 +26,9 @@ services:
       # Generar con: node scripts/hash-password.js "tu contraseña"
       - key: ADMIN_PASSWORD_HASH
         sync: false
+      # Ingreso de clientes con Google: ID de cliente OAuth (el mismo que usa el sitio)
+      - key: GOOGLE_CLIENT_ID
+        sync: false
       # Mercado Pago (Checkout Pro). Sin MP_ACCESS_TOKEN los pedidos se guardan como cotización.
       - key: MP_ACCESS_TOKEN
         sync: false

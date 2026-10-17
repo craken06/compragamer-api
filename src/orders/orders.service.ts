@@ -135,16 +135,25 @@ export class OrdersService {
     }));
     const code = order.code;
 
-    if (req.saveDetails === true) {
-      // lo omitido no cambia: con retiro no se toca la dirección; sin facturación, tampoco
-      await this.customers.updateMe(customer.id, {
-        phone,
-        ...(address ? { defaultAddress: address } : {}),
-        ...(billing ? { billing } : {}),
-      });
-    }
+    // guardar en la cuenta es un extra: se hace al final y nunca puede dejar el pedido sin link de pago
+    const saveDetails = async () => {
+      if (req.saveDetails !== true) return;
+      try {
+        // lo omitido no cambia: con retiro no se toca la dirección; sin facturación, tampoco
+        await this.customers.updateMe(customer.id, {
+          phone,
+          ...(address ? { defaultAddress: address } : {}),
+          ...(billing ? { billing } : {}),
+        });
+      } catch (err) {
+        this.logger.warn(`No se pudieron guardar los datos de la cuenta ${customer.id} (pedido ${code}): ${(err as Error)?.message}`);
+      }
+    };
 
-    if (quote) return { code, status: order.status, totalArs: total, paymentUrl: null };
+    if (quote) {
+      await saveDetails();
+      return { code, status: order.status, totalArs: total, paymentUrl: null };
+    }
 
     const frontend = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
     const apiPublic = (process.env.API_PUBLIC_URL || '').replace(/\/+$/, '');
@@ -158,6 +167,7 @@ export class OrdersService {
       });
       // se guarda el link para el botón "Pagar" de un pedido pendiente
       await this.prisma.order.update({ where: { id: order.id }, data: { mpPreferenceId: pref.id, paymentUrl: pref.init_point } });
+      await saveDetails();
       return { code, status: order.status, totalArs: total, paymentUrl: pref.init_point };
     } catch (err) {
       // el pedido queda guardado como cotización para no perderlo

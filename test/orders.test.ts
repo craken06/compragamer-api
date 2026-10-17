@@ -157,6 +157,19 @@ test('pedido: saveDetails true actualiza al cliente; false no', async () => {
   assert.ok(!('billing' in customers.calls[1].body));
 });
 
+test('pedido: si guardar los datos en la cuenta falla, igual devuelve paymentUrl y el pedido lo conserva', async () => {
+  const db = fakePrisma(products);
+  const customers: any = { updateMe: async () => { throw new Error('falla la base'); } };
+  const r = await svcOf(db, fakeMp(), customers).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], saveDetails: true });
+  assert.equal(r.paymentUrl, 'https://mp.test/checkout');
+  assert.equal(db.orders[0].paymentUrl, 'https://mp.test/checkout');
+  assert.equal(db.orders[0].status, 'pendiente_pago');
+  // en cotización también
+  const mp = fakeMp(); mp.enabled = false;
+  const r2 = await svcOf(fakePrisma(products), mp, customers).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], saveDetails: true });
+  assert.equal(r2.status, 'cotizacion');
+});
+
 test('pedido: validaciones de ítems', async () => {
   const svc = svcOf(fakePrisma(products));
   await assert.rejects(svc.create(ana, { ...base, items: [] }));

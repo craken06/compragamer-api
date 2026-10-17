@@ -104,6 +104,14 @@ Ejemplo de body para `POST /products`:
 | POST | `/payments/webhook` | Notificaciones de Mercado Pago (consulta el pago a MP antes de marcarlo pagado) |
 | POST | `/contact` | Formulario de contacto (y Botón de arrepentimiento) |
 
+### Cuentas de clientes (requieren `GOOGLE_CLIENT_ID` y `JWT_SECRET`)
+El cliente ingresa con Google; la sesión dura 30 días y viaja en `Authorization: Bearer <token>`.
+| Método | Ruta | Qué hace |
+|---|---|---|
+| POST | `/customer-auth/google` | `{ credential }` (ID token de Google) -> `{ token, customer }` |
+| GET/PATCH | `/me` | Datos de la cuenta (teléfono, dirección, facturación) |
+| GET | `/me/orders`, `/orders/:code` | Pedidos del cliente |
+
 ### Administración (requieren `Authorization: Bearer <token>` o `x-admin-key`)
 | Método | Ruta | Qué hace |
 |---|---|---|
@@ -111,6 +119,8 @@ Ejemplo de body para `POST /products`:
 | GET | `/admin/products`, `/admin/products/incomplete` | Todos los productos (incl. ocultos) y los que tienen specs incompletos |
 | POST/DELETE | `/products/:id/images[/:imageId]` | Imágenes por URL https (tabla `product_images`) |
 | GET | `/admin/orders`, `/admin/contact` | Pedidos y mensajes |
+| GET | `/admin/customers?q=` | Clientes (búsqueda por nombre, email o teléfono) con pedidos pagados y total |
+| GET/PATCH | `/admin/customers/:id` | Ficha con sus pedidos; `PATCH { blocked }` bloquea o desbloquea la cuenta |
 | GET/POST/PUT | `/admin/compatibility-rules[/:id]` | Reglas del motor como datos |
 
 ## Motor de compatibilidad

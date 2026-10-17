@@ -101,7 +101,7 @@ async function main() {
     if (prot && Object.keys(newProtProps).length) {
       await tx.category.update({ where: { id: prot.id }, data: { specSchema: { ...prot.specSchema, properties: { ...protProps, ...newProtProps } } } });
     }
-  });
+  }, { timeout: 60000, maxWait: 10000 }); // Neon + el relleno pedido por pedido pueden pasar los 5 s por defecto
   console.log('\nListo.');
   await prisma.$disconnect();
 }

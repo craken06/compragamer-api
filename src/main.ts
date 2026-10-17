@@ -21,6 +21,9 @@ async function bootstrap() {
   if (!process.env.JWT_SECRET || !process.env.ADMIN_USER || !process.env.ADMIN_PASSWORD_HASH) {
     console.warn('⚠️  Login del panel deshabilitado: faltan JWT_SECRET, ADMIN_USER o ADMIN_PASSWORD_HASH.');
   }
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    console.warn('⚠️  GOOGLE_CLIENT_ID no está definida: el ingreso de clientes con Google está deshabilitado.');
+  }
   if (!process.env.MP_ACCESS_TOKEN) {
     console.warn('⚠️  MP_ACCESS_TOKEN no está definida: los pedidos se guardan como cotización (sin pago online).');
   } else if (!process.env.FRONTEND_URL || !process.env.API_PUBLIC_URL) {

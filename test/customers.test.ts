@@ -197,3 +197,110 @@ test('POST /customer-auth/google: sin GOOGLE_CLIENT_ID -> 403; con él, verifica
   assert.equal(r.customer.email, 'ana@example.com');
   assert.equal(verifyToken(r.token, SECRET)!.role, 'customer');
 });
+
+// ---- Administración de clientes (spec 4.8) ----
+import { NotFoundException } from '@nestjs/common';
+import { AdminCustomersController } from '../src/customers/admin-customers.controller';
+import { corsOptions } from '../src/cors';
+
+function adminDb() {
+  const t0 = new Date('2026-01-01');
+  const customers: any[] = [
+    { id: 1, email: 'ana@example.com', name: 'Ana Pérez', avatarUrl: null, phone: '3415551234', defaultAddress: null, billingDoc: null, billingName: null, blocked: false, createdAt: t0, lastLoginAt: new Date('2026-03-01') },
+    { id: 2, email: 'beto@example.com', name: 'Beto', avatarUrl: null, phone: null, defaultAddress: null, billingDoc: null, billingName: null, blocked: false, createdAt: t0, lastLoginAt: new Date('2026-05-01') },
+  ];
+  const identities = [
+    { customerId: 1, provider: 'google' }, { customerId: 1, provider: 'google' }, { customerId: 1, provider: 'microsoft' },
+    { customerId: 2, provider: 'google' },
+  ];
+  const orders = [
+    { id: 1, customerId: 1, status: 'pagado', totalArs: '1000.50', createdAt: new Date('2026-02-01'), items: [] },
+    { id: 2, customerId: 1, status: 'pagado', totalArs: '2000', createdAt: new Date('2026-02-02'), items: [] },
+    { id: 3, customerId: 1, status: 'pendiente_pago', totalArs: '9999', createdAt: new Date('2026-02-03'), items: [] },
+  ];
+  const has = (v: any, c: any) => String(v ?? '').toLowerCase().includes(String(c.contains).toLowerCase());
+  const db: any = {
+    customer: {
+      findMany: async (args: any) => {
+        let r = customers.filter((c) => !args.where?.OR || args.where.OR.some((o: any) => Object.entries(o).every(([k, cond]) => has(c[k], cond))));
+        r = [...r].sort((a, b) => b.lastLoginAt - a.lastLoginAt).slice(0, args.take);
+        return r.map((c) => ({
+          ...c,
+          identities: identities.filter((i) => i.customerId === c.id),
+          orders: orders.filter((o) => o.customerId === c.id && o.status === args.include.orders.where.status).map((o) => ({ totalArs: o.totalArs })),
+        }));
+      },
+      findUnique: async ({ where }: any) => {
+        const c = customers.find((x) => x.id === where.id);
+        return c ? { ...c, identities: identities.filter((i) => i.customerId === c.id), orders: orders.filter((o) => o.customerId === c.id && o.status === 'pagado').map((o) => ({ totalArs: o.totalArs })) } : null;
+      },
+      update: async ({ where, data }: any) => {
+        const c = customers.find((x) => x.id === where.id)!;
+        Object.assign(c, data);
+        return { ...c, identities: identities.filter((i) => i.customerId === c.id), orders: orders.filter((o) => o.customerId === c.id && o.status === 'pagado').map((o) => ({ totalArs: o.totalArs })) };
+      },
+    },
+    order: {
+      findMany: async ({ where }: any) => orders.filter((o) => o.customerId === where.customerId).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+    },
+  };
+  return db;
+}
+
+test('adminList: sin filtro, por lastLoginAt desc; cuenta solo pagados y providers sin duplicados', async () => {
+  const rows = await new CustomersService(adminDb()).adminList();
+  assert.deepEqual(rows.map((r) => r.id), [2, 1]);
+  const ana = rows[1];
+  assert.equal(ana.paidOrders, 2);
+  assert.equal(ana.paidTotalArs, 3000.5);
+  assert.deepEqual(ana.providers, ['google', 'microsoft']);
+  assert.equal(rows[0].paidOrders, 0);
+  assert.equal(rows[0].paidTotalArs, 0);
+  assert.equal(typeof ana.paidTotalArs, 'number');
+});
+
+test('adminList: q filtra por nombre, email o teléfono sin distinguir mayúsculas', async () => {
+  const svc = new CustomersService(adminDb());
+  assert.deepEqual((await svc.adminList('ANA')).map((r) => r.id), [1]);
+  assert.deepEqual((await svc.adminList('beto@EXAMPLE')).map((r) => r.id), [2]);
+  assert.deepEqual((await svc.adminList('341 555')).map((r) => r.id), [1]);
+  assert.deepEqual((await svc.adminList('nadie')).map((r) => r.id), []);
+  assert.equal((await svc.adminList('   ')).length, 2);
+});
+
+test('adminDetail: datos, bloqueo, providers y pedidos más nuevos primero; 404 si no existe', async () => {
+  const svc = new CustomersService(adminDb());
+  const d = await svc.adminDetail(1);
+  assert.equal(d.email, 'ana@example.com');
+  assert.equal(d.blocked, false);
+  assert.deepEqual(d.providers, ['google', 'microsoft']);
+  assert.deepEqual(d.orders.map((o: any) => o.id), [3, 2, 1]);
+  await assert.rejects(svc.adminDetail(99), NotFoundException);
+});
+
+test('setBlocked: cambia el campo y devuelve la fila; 404 si no existe', async () => {
+  const db = adminDb();
+  const svc = new CustomersService(db);
+  const row = await svc.setBlocked(1, true);
+  assert.equal(row.blocked, true);
+  assert.equal(row.paidOrders, 2);
+  assert.equal((await svc.setBlocked(1, false)).blocked, false);
+  await assert.rejects(svc.setBlocked(99, true), NotFoundException);
+});
+
+test('AdminCustomersController: blocked debe ser booleano e id entero positivo', async () => {
+  const c = new AdminCustomersController(new CustomersService(adminDb()));
+  await assert.rejects(async () => c.setBlocked('1', { blocked: 'si' } as any), BadRequestException);
+  await assert.rejects(async () => c.setBlocked('1', undefined as any), BadRequestException);
+  assert.throws(() => c.detail('abc'), BadRequestException);
+  assert.throws(() => c.detail('0'), BadRequestException);
+  assert.equal((await c.setBlocked('2', { blocked: true })).blocked, true);
+});
+
+test('CORS: permite Authorization y PATCH', () => {
+  const o = corsOptions();
+  assert.ok(o.allowedHeaders.includes('Authorization'));
+  assert.ok(o.allowedHeaders.includes('Content-Type'));
+  assert.ok(o.allowedHeaders.includes('ngrok-skip-browser-warning'));
+  assert.deepEqual(o.methods, ['GET', 'HEAD', 'POST', 'PATCH', 'OPTIONS']);
+});

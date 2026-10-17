@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { CUSTOMER_TOKEN_TTL_SECONDS, issueToken } from '../auth/token';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShippingAddress, normalizeAddress, normalizeBilling, normalizePhone } from './validation';
@@ -16,6 +16,29 @@ export interface PublicCustomer {
 }
 
 export interface LoginProfile { sub: string; email: string; name: string; picture: string | null }
+
+export interface AdminCustomerRow {
+  id: number; name: string; email: string; avatarUrl: string | null; phone: string | null;
+  providers: string[]; createdAt: Date; lastLoginAt: Date; blocked: boolean;
+  paidOrders: number; paidTotalArs: number;
+}
+
+// cliente con sus identidades y sus pedidos pagados (solo el total) -> fila del panel
+const ADMIN_INCLUDE = {
+  identities: { select: { provider: true } },
+  orders: { where: { status: 'pagado' as const }, select: { totalArs: true } },
+};
+
+function toAdminRow(c: any): AdminCustomerRow {
+  const paid: any[] = c.orders ?? [];
+  return {
+    id: c.id, name: c.name, email: c.email, avatarUrl: c.avatarUrl ?? null, phone: c.phone ?? null,
+    providers: [...new Set<string>((c.identities ?? []).map((i: any) => i.provider))].sort(),
+    createdAt: c.createdAt, lastLoginAt: c.lastLoginAt, blocked: !!c.blocked,
+    paidOrders: paid.length,
+    paidTotalArs: Math.round(paid.reduce((s, o) => s + Number(o.totalArs), 0) * 100) / 100,
+  };
+}
 
 const BLOCKED_MESSAGE = 'Tu cuenta está suspendida. Escribinos por WhatsApp.';
 
@@ -116,5 +139,41 @@ export class CustomersService {
     }
     const updated = await this.prisma.customer.update({ where: { id }, data });
     return toPublicCustomer(updated);
+  }
+
+  /** Listado del panel (spec 4.8): búsqueda por nombre, email o teléfono; los de ingreso más reciente primero. */
+  async adminList(q?: string): Promise<AdminCustomerRow[]> {
+    const search = typeof q === 'string' ? q.trim().slice(0, 80) : '';
+    const where: Prisma.CustomerWhereInput = {};
+    if (search) {
+      const digits = search.replace(/\D/g, '');
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        ...(digits ? [{ phone: { contains: digits } }] : []),
+      ];
+    }
+    const rows = await this.prisma.customer.findMany({ where, orderBy: { lastLoginAt: 'desc' }, take: 200, include: ADMIN_INCLUDE });
+    return rows.map(toAdminRow);
+  }
+
+  /** Ficha del cliente: sus datos, el bloqueo y todos sus pedidos (misma forma que el listado de pedidos del panel). */
+  async adminDetail(id: number) {
+    const c = await this.prisma.customer.findUnique({ where: { id }, include: ADMIN_INCLUDE });
+    if (!c) throw new NotFoundException('Cliente no encontrado');
+    const orders = await this.prisma.order.findMany({
+      where: { customerId: id }, orderBy: { createdAt: 'desc' },
+      include: { items: true, customer: { select: { id: true, name: true } } },
+    });
+    return { ...toPublicCustomer(c), ...toAdminRow(c), orders };
+  }
+
+  /** Bloquear impide ingresar y usar la sesión vigente; no borra nada. */
+  async setBlocked(id: number, blocked: boolean): Promise<AdminCustomerRow> {
+    if (typeof blocked !== 'boolean') throw new BadRequestException('blocked tiene que ser verdadero o falso.');
+    const c = await this.prisma.customer.findUnique({ where: { id } });
+    if (!c) throw new NotFoundException('Cliente no encontrado');
+    const updated = await this.prisma.customer.update({ where: { id }, data: { blocked }, include: ADMIN_INCLUDE });
+    return toAdminRow(updated);
   }
 }
