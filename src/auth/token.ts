@@ -3,7 +3,7 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 /*
  * Login de un único administrador, sin dependencias externas.
  *  - Contraseña: ADMIN_PASSWORD_HASH con formato "scrypt:<salt hex>:<hash hex>"
- *    (se genera con: node scripts/hash-password.js "mi clave").
+ *    (se genera con: node scripts/hash-password.js, que pide la clave por consola).
  *  - Token: payload JSON en base64url + firma HMAC-SHA256 con JWT_SECRET (mismo formato que un JWT HS256).
  */
 
