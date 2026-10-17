@@ -99,8 +99,8 @@ Ejemplo de body para `POST /products`:
 | GET | `/compatibility/rules` | Parámetros del motor (temperatura mínima de diseño, márgenes) y reglas activas |
 | POST | `/compatibility/evaluate` | Veredicto ✓/⚠/✕ de varias opciones a la vez (inversores, baterías, cables/protecciones DC) |
 | POST | `/calculators/consumption` \| `cost` \| `savings` \| `orientation` | Calculadoras con campo `warnings` |
-| POST | `/orders` | Crea el pedido con precios del servidor y devuelve el link de pago de Mercado Pago |
-| GET | `/orders/:publicId` | Estado del pedido (página de vuelta del pago) |
+| POST | `/orders` | Requiere sesión de cliente (Bearer). Body `{ items, phone, delivery: { method: 'envio'\|'retiro', address? }, billing?, saveDetails?, notes?, mode? }` -> `{ code, status, totalArs, paymentUrl }`. Precios del servidor; `paymentUrl` es el link de Mercado Pago |
+| GET | `/orders/:id` | Estado del pedido (página de vuelta del pago). Con código `AX-...` hace falta la sesión de su dueño; el UUID sólo vale para pedidos viejos sin cliente |
 | POST | `/payments/webhook` | Notificaciones de Mercado Pago (consulta el pago a MP antes de marcarlo pagado) |
 | POST | `/contact` | Formulario de contacto (y Botón de arrepentimiento) |
 
@@ -118,7 +118,9 @@ El cliente ingresa con Google; la sesión dura 30 días y viaja en `Authorizatio
 | POST | `/auth/login` | `{ user, password }` -> token de 12 h (usuario único: `ADMIN_USER` / `ADMIN_PASSWORD_HASH`) |
 | GET | `/admin/products`, `/admin/products/incomplete` | Todos los productos (incl. ocultos) y los que tienen specs incompletos |
 | POST/DELETE | `/products/:id/images[/:imageId]` | Imágenes por URL https (tabla `product_images`) |
-| GET | `/admin/orders`, `/admin/contact` | Pedidos y mensajes |
+| GET | `/admin/orders?filter=para_preparar\|todos\|pendientes_pago\|entregados&q=` | Pedidos según el filtro (por defecto, "para preparar": pagados sin entregar) y búsqueda `q` |
+| PATCH | `/admin/orders/:id/fulfillment` | `{ status, trackingNumber? }`: `pendiente`, `preparando`, `enviado`, `listo_para_retirar` o `entregado` |
+| GET | `/admin/contact` | Mensajes de contacto |
 | GET | `/admin/customers?q=` | Clientes (búsqueda por nombre, email o teléfono) con pedidos pagados y total |
 | GET/PATCH | `/admin/customers/:id` | Ficha con sus pedidos; `PATCH { blocked }` bloquea o desbloquea la cuenta |
 | GET/POST/PUT | `/admin/compatibility-rules[/:id]` | Reglas del motor como datos |
@@ -144,7 +146,7 @@ node scripts/migrate.js                          # tablas compatibility_rules, o
 node scripts/backfill-baterias-paneles-micro.js  # tensión/corriente de baterías, tecnología de paneles, Enphase IQ8MC
 node scripts/backfill-inversores-y-categorias.js # (ya aplicado el 2026-10-15)
 node scripts/hash-password.js "contraseña"       # valor de ADMIN_PASSWORD_HASH
-npm test                                         # tests del motor, calculadoras, login y pedidos (sin base ni red)
+npm test                                         # tests del motor, calculadoras, login y pedidos (sin base ni red); requiere Node 21+ (glob en `node --test`)
 ```
 
 ## Mercado Pago

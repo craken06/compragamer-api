@@ -82,6 +82,12 @@ async function main() {
     : Number((await prisma.$queryRaw`SELECT COUNT(*)::int AS n FROM orders`)[0].n);
   console.log(`Pedidos sin código: ${noCode}`);
 
+  // Pedidos pagados que se marcan como entregados: sólo si la columna fulfillment_status todavía no existe.
+  const hasFulfillmentCol = (await prisma.$queryRaw`SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'fulfillment_status'`).length > 0;
+  const paidToDeliver = !ordersExist || hasFulfillmentCol ? 0
+    : Number((await prisma.$queryRaw`SELECT COUNT(*)::int AS n FROM orders WHERE status::text = 'pagado'`)[0].n);
+  console.log(`Pedidos pagados que se marcan como entregados (solo la primera vez): ${paidToDeliver}`);
+
   if (!APPLY) { await prisma.$disconnect(); return; }
 
   await prisma.$transaction(async (tx) => {

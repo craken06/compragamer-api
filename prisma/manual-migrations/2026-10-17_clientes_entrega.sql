@@ -38,7 +38,18 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_method    TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_address   JSONB;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS billing_doc        TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS billing_name       TEXT;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_status fulfillment_status_enum NOT NULL DEFAULT 'pendiente';
+-- Sólo la primera vez (cuando la columna todavía no existe): los pedidos ya pagados antes de esta
+-- función se marcan como entregados para que no inunden "Para preparar". Corridas siguientes: no hace nada.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'fulfillment_status'
+  ) THEN
+    ALTER TABLE orders ADD COLUMN fulfillment_status fulfillment_status_enum NOT NULL DEFAULT 'pendiente';
+    UPDATE orders SET fulfillment_status = 'entregado' WHERE status::text = 'pagado';
+  END IF;
+END $$;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number    TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_url        TEXT;
 
