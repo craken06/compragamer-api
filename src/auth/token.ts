@@ -11,6 +11,7 @@ const b64url = (b: Buffer | string) => Buffer.from(b).toString('base64').replace
 const fromB64url = (s: string) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 
 export const TOKEN_TTL_SECONDS = 12 * 60 * 60;
+export const CUSTOMER_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 export function hashPassword(password: string, salt = randomBytes(16).toString('hex')): string {
   const hash = scryptSync(password, salt, 64).toString('hex');
@@ -30,14 +31,20 @@ function sign(data: string, secret: string) {
   return b64url(createHmac('sha256', secret).update(data).digest());
 }
 
-export function issueToken(sub: string, secret: string, now = Math.floor(Date.now() / 1000)): string {
+/** Los tokens de admin y de cliente comparten JWT_SECRET: el `role` los distingue (por defecto, admin). */
+export function issueToken(
+  sub: string,
+  secret: string,
+  opts: { role?: 'admin' | 'customer'; ttlSeconds?: number; now?: number } = {},
+): string {
+  const { role = 'admin', ttlSeconds = TOKEN_TTL_SECONDS, now = Math.floor(Date.now() / 1000) } = opts;
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = b64url(JSON.stringify({ sub, iat: now, exp: now + TOKEN_TTL_SECONDS }));
+  const payload = b64url(JSON.stringify({ sub, role, iat: now, exp: now + ttlSeconds }));
   return `${header}.${payload}.${sign(`${header}.${payload}`, secret)}`;
 }
 
 /** Devuelve el payload si la firma y el vencimiento son válidos; si no, null. */
-export function verifyToken(token: string, secret: string, now = Math.floor(Date.now() / 1000)): { sub: string; exp: number } | null {
+export function verifyToken(token: string, secret: string, now = Math.floor(Date.now() / 1000)): { sub: string; role?: string; exp: number } | null {
   if (!token || !secret) return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;

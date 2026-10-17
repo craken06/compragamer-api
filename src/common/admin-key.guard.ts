@@ -23,6 +23,8 @@ export class AdminKeyGuard implements CanActivate {
     if (jwtSecret && auth.startsWith('Bearer ')) {
       const payload = verifyToken(auth.slice(7).trim(), jwtSecret);
       if (!payload) throw new UnauthorizedException('Sesión vencida o inválida: volvé a iniciar sesión');
+      // Los clientes usan el mismo JWT_SECRET: solo role=admin pasa (los tokens viejos sin role también se rechazan).
+      if (payload.role !== 'admin') throw new UnauthorizedException('Sesión vencida o inválida: volvé a iniciar sesión');
       req.admin = payload.sub;
       return true;
     }

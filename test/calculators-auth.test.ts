@@ -48,7 +48,7 @@ test('contraseña: hash scrypt verificable, sin "$" (Prisma expande variables de
 });
 
 test('token: firma, vencimiento y manipulación', () => {
-  const t = issueToken('admin', 's3cret', 1000);
+  const t = issueToken('admin', 's3cret', { now: 1000 });
   assert.equal(verifyToken(t, 's3cret', 1001)!.sub, 'admin');
   assert.equal(verifyToken(t, 'otro', 1001), null);
   assert.equal(verifyToken(t, 's3cret', 1000 + 13 * 3600), null); // vencido

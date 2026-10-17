@@ -11,7 +11,7 @@
     "prisma:pull": "prisma db pull",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "test": "node -r ts-node/register --test test/engine.test.ts test/calculators-auth.test.ts test/orders.test.ts",
+    "test": "node -r ts-node/register --test test/*.test.ts",
     "migrate:manual": "node scripts/migrate.js"
   },
   "dependencies": {
