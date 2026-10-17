@@ -3,11 +3,15 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { allowedOrigins, corsOptions } from './cors';
+import { securityHeaders } from './security-headers';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   // detrás del proxy de Render/ngrok: la IP real del cliente viene en X-Forwarded-For (límites por IP)
   app.set('trust proxy', 1);
+  // no publicar el framework, y headers de seguridad en todas las respuestas (también en errores y preflight)
+  app.disable('x-powered-by');
+  app.use(securityHeaders);
 
   const origins = allowedOrigins();
   if (origins.length === 0) {
