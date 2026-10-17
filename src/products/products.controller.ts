@@ -16,6 +16,40 @@ import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
+// Campos que el admin puede escribir. El body nunca se esparce entero en Prisma: así no se cuelan
+// id, createdAt ni escrituras anidadas (images: { create: ... }) que saltean las validaciones.
+const WRITABLE = ['brand', 'name', 'sku', 'price', 'currency', 'stockStatus', 'description', 'specs', 'datasheetUrl', 'active'] as const;
+const SCALAR_TYPES: Record<string, string[]> = {
+  brand: ['string'], name: ['string'], sku: ['string'], price: ['number', 'string'], currency: ['string'],
+  stockStatus: ['string'], description: ['string'], datasheetUrl: ['string'], active: ['boolean'],
+};
+
+/** Arma el data de Prisma solo con los campos permitidos y con el tipo esperado (null borra los opcionales). */
+export function productData(dto: Record<string, any>): Record<string, any> {
+  const data: Record<string, any> = {};
+  for (const k of WRITABLE) {
+    const v = dto?.[k];
+    if (v === undefined) continue;
+    if (k === 'specs') {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) throw new BadRequestException('specs tiene que ser un objeto JSON.');
+    } else if (v !== null && !SCALAR_TYPES[k].includes(typeof v)) {
+      throw new BadRequestException(`El campo ${k} tiene un tipo inválido.`);
+    }
+    data[k] = v;
+  }
+  // el link se muestra en la tienda: solo http(s), nada de javascript: ni data:
+  if (typeof data.datasheetUrl === 'string' && data.datasheetUrl && !/^https?:\/\/\S+$/i.test(data.datasheetUrl.trim())) {
+    throw new BadRequestException('datasheetUrl tiene que ser una URL http(s).');
+  }
+  return data;
+}
+
+function categoryIdOf(v: unknown): number {
+  const id = Number(v);
+  if (!Number.isInteger(id) || id <= 0) throw new BadRequestException('categoryId inválido.');
+  return id;
+}
+
 @Controller('products')
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
@@ -37,20 +71,18 @@ export class ProductsController {
   @Post()
   @UseGuards(AdminKeyGuard)
   create(@Body() dto: CreateProductDto) {
-    const { categoryId, ...rest } = dto;
     return this.productsService.create({
-      ...rest,
-      category: { connect: { id: categoryId } },
+      ...(productData(dto) as any),
+      category: { connect: { id: categoryIdOf(dto?.categoryId) } },
     });
   }
 
   @Put(':id')
   @UseGuards(AdminKeyGuard)
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateProductDto) {
-    const { categoryId, ...rest } = dto;
     return this.productsService.update(id, {
-      ...rest,
-      ...(categoryId ? { category: { connect: { id: categoryId } } } : {}),
+      ...productData(dto),
+      ...(dto?.categoryId ? { category: { connect: { id: categoryIdOf(dto.categoryId) } } } : {}),
     });
   }
 
