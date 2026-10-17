@@ -21,6 +21,7 @@ const FAIL_MESSAGE = 'No pudimos verificar tu cuenta de Google. Probá de nuevo.
 const fail = () => new UnauthorizedException(FAIL_MESSAGE);
 
 const DEFAULT_TTL_MS = 3600 * 1000;
+const FORCED_COOLDOWN_MS = 60 * 1000;
 const CLOCK_SKEW_SECONDS = 60;
 const ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 
@@ -30,8 +31,8 @@ type FetchLike = (url: string) => Promise<{ ok: boolean; json(): Promise<any>; h
 
 /**
  * Caché de las claves de Google según `Cache-Control: max-age` (3600 s si falta).
- * Si llega un `kid` que no está y la caché sigue vigente, descarga una sola vez más; si sigue sin estar,
- * no vuelve a descargar por ese `kid` hasta que la caché venza (un `kid` inventado no fuerza una descarga por pedido).
+ * Si llega un `kid` que no está y la caché sigue vigente, fuerza una descarga, pero como máximo una cada 60 s
+ * sin importar el `kid` (así, kids inventados no amplifican pedidos hacia Google). El vencimiento normal descarga igual que siempre.
  * Una descarga fallida devuelve null y no se guarda.
  */
 export function createKeyCache(
@@ -41,7 +42,7 @@ export function createKeyCache(
 ): (kid: string) => Promise<Jwk | null> {
   let keys = new Map<string, Jwk>();
   let expiresAt = 0;
-  let refetched = new Set<string>(); // kids ya buscados con una descarga fresca dentro de esta vigencia
+  let lastForced = -Infinity; // momento de la última recarga forzada por kid desconocido
 
   async function download(): Promise<boolean> {
     try {
@@ -54,7 +55,6 @@ export function createKeyCache(
       const match = /max-age=(\d+)/.exec(res.headers.get('cache-control') || '');
       keys = m;
       expiresAt = now() + (match ? Number(match[1]) * 1000 : DEFAULT_TTL_MS);
-      refetched = new Set();
       return true;
     } catch {
       return false;
@@ -64,10 +64,11 @@ export function createKeyCache(
   return async (kid: string) => {
     const fresh = now() < expiresAt;
     if (fresh && keys.has(kid)) return keys.get(kid)!;
-    if (fresh && refetched.has(kid)) return null;
-    const hadCache = fresh;
+    if (fresh) {
+      if (now() - lastForced < FORCED_COOLDOWN_MS) return null;
+      lastForced = now(); // también si la descarga falla: el enfriamiento corre igual
+    }
     if (!(await download())) return null;
-    if (hadCache) refetched.add(kid);
     return keys.get(kid) ?? null;
   };
 }

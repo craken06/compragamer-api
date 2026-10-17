@@ -108,3 +108,30 @@ test('caché: descarga fallida devuelve null y no se cachea', async () => {
   const boom: any = async () => { throw new Error('red'); };
   assert.equal(await createKeyCache('u', boom, () => 5)('k1'), null);
 });
+
+test('caché: kids desconocidos distintos (A, B, A) en 60 s cuestan 1 descarga extra en total', async () => {
+  let t = 10_000;
+  const f = fakeFetch('max-age=600');
+  const get = createKeyCache('u', f, () => t);
+  await get('k1');
+  assert.equal(f.calls, 1);
+  assert.equal(await get('A'), null);
+  t += 1_000;
+  assert.equal(await get('B'), null);
+  t += 1_000;
+  assert.equal(await get('A'), null);
+  assert.equal(f.calls, 2);
+});
+test('caché: pasado el enfriamiento de 60 s, otro kid desconocido cuesta 1 descarga más', async () => {
+  let t = 10_000;
+  const f = fakeFetch('max-age=600');
+  const get = createKeyCache('u', f, () => t);
+  await get('k1');
+  await get('A');
+  assert.equal(f.calls, 2);
+  t += 61_000;
+  assert.equal(await get('B'), null);
+  assert.equal(f.calls, 3);
+  assert.equal(await get('C'), null);
+  assert.equal(f.calls, 3);
+});
