@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { CUSTOMER_TOKEN_TTL_SECONDS, issueToken } from '../auth/token';
 import { PrismaService } from '../prisma/prisma.service';
@@ -42,7 +43,7 @@ export class CustomersService {
 
     // el verificador ya completa el nombre; acá se asegura igual (parte local del email)
     const name = profile.name?.trim() || profile.email.split('@')[0];
-    profile = { ...profile, name };
+    profile = { ...profile, name, email: profile.email.trim().toLowerCase() };
 
     let customer: any;
     try {
@@ -102,10 +103,11 @@ export class CustomersService {
     id: number,
     body: { phone?: string | null; defaultAddress?: unknown; billing?: unknown },
   ): Promise<PublicCustomer> {
-    const data: Record<string, unknown> = {};
+    const data: Prisma.CustomerUpdateInput = {};
     if (body?.phone !== undefined) data.phone = body.phone === null ? null : normalizePhone(body.phone);
     if (body?.defaultAddress !== undefined) {
-      data.defaultAddress = body.defaultAddress === null ? null : normalizeAddress(body.defaultAddress);
+      // un Json nullable no acepta null a secas: borrar es Prisma.DbNull
+      data.defaultAddress = body.defaultAddress === null ? Prisma.DbNull : (normalizeAddress(body.defaultAddress) as unknown as Prisma.InputJsonObject);
     }
     if (body?.billing !== undefined) {
       const billing = body.billing === null ? null : normalizeBilling(body.billing);

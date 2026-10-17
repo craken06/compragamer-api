@@ -7,6 +7,7 @@ import { BadRequestException, ForbiddenException, UnauthorizedException } from '
 import { CustomersService } from '../src/customers/customers.service';
 import { CustomerGuard } from '../src/customers/customer.guard';
 import { CustomerAuthController } from '../src/customers/customer-auth.controller';
+import { Prisma } from '@prisma/client';
 import { issueToken, verifyToken } from '../src/auth/token';
 
 process.env.JWT_SECRET = 'test-secret';
@@ -36,7 +37,12 @@ function fakePrisma() {
         if (nested?.create) identities.push({ id: identities.length + 1, customerId: c.id, ...nested.create });
         return c;
       },
-      update: async ({ where, data }: any) => Object.assign(customers.find((c) => c.id === where.id), data),
+      update: async ({ where, data }: any) => {
+        // como la base real: DbNull se guarda como NULL
+        const d = { ...data };
+        if (d.defaultAddress === Prisma.DbNull) d.defaultAddress = null;
+        return Object.assign(customers.find((c) => c.id === where.id), d);
+      },
     },
   };
   return db;
@@ -54,6 +60,15 @@ test('alta nueva: crea cliente + identidad y el token es de cliente', async () =
   const p = verifyToken(token, SECRET)!;
   assert.equal(p.role, 'customer');
   assert.equal(p.sub, String(customer.id));
+  const raw = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+  assert.equal(raw.exp - raw.iat, 2592000);
+});
+
+test('el email se normaliza (trim + minúsculas) al ingresar', async () => {
+  const db = fakePrisma();
+  const { customer } = await new CustomersService(db).loginWithIdentity('google', { ...profile, email: '  Ana@Example.COM ' });
+  assert.equal(customer.email, 'ana@example.com');
+  assert.equal(db.identities[0].email, 'ana@example.com');
 });
 
 test('segundo ingreso con el mismo sub: no crea nada y actualiza nombre, foto y último ingreso', async () => {
@@ -108,6 +123,9 @@ function ctx(authorization?: string) {
 test('guard: token de admin, sin token, o sub inválido -> 401', async () => {
   const db = fakePrisma();
   const guard = new CustomerGuard(db);
+  // el cliente 1 existe: el 401 del token de admin tiene que venir del rol, no de un cliente faltante
+  const { customer } = await new CustomersService(db).loginWithIdentity('google', profile);
+  assert.equal(customer.id, 1);
   const msg = 'Tu sesión venció. Ingresá de nuevo.';
   const bad = (e: any) => e instanceof UnauthorizedException && e.message === msg;
   await assert.rejects(() => guard.canActivate(ctx(`Bearer ${issueToken('1', SECRET)}`).context), bad);
@@ -146,7 +164,12 @@ test('updateMe: teléfono inválido -> 400; defaultAddress null la borra; omitid
   assert.equal(a.defaultAddress?.street, 'Av. Siempreviva 742');
   assert.equal(a.billingDoc, '20123456');
 
+  let sent: any;
+  const origUpdate = db.customer.update;
+  db.customer.update = async (args: any) => { sent = args.data; return origUpdate(args); };
   const b = await svc.updateMe(customer.id, { defaultAddress: null });
+  assert.equal(sent.defaultAddress, Prisma.DbNull);
+  db.customer.update = origUpdate;
   assert.equal(b.defaultAddress, null);
   assert.equal(b.phone, '+543415551234');
   assert.equal(b.billingName, 'Ana SA');
