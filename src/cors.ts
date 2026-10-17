@@ -18,9 +18,11 @@ function toOrigin(value: string): string {
  * (separados por coma). Ej: https://auryx.com,https://usuario.github.io
  * Si no está definida (desarrollo), se aceptan solo orígenes locales.
  * Desde un navegador se permite leer, los POST públicos (compatibilidad, calculadoras,
- * contacto) y las cuentas de clientes: el sitio manda Authorization (sesión del cliente)
- * en /customer-auth/google, /me y /orders, y PATCH en /me. x-admin-key no se habilita acá:
- * el panel de administración llama a la API desde su propio servidor.
+ * contacto), las cuentas de clientes (Authorization con la sesión del cliente) y el panel
+ * de administración, que se publica en el mismo dominio que el sitio y llama directo con
+ * su token de admin (por eso PUT y DELETE). La seguridad la pone el token, no el origen:
+ * va en un header, no en cookies, así que otra página no puede usarlo por el usuario.
+ * x-admin-key no se habilita acá: es solo para scripts.
  */
 export function allowedOrigins(): string[] {
   return (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).map(toOrigin);
@@ -40,7 +42,7 @@ export function corsOptions() {
       }
       cb(null, ok);
     },
-    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'OPTIONS'],
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'], // el último lo manda el frontend para saltar el aviso de ngrok
     maxAge: 86400,
   };

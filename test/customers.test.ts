@@ -297,10 +297,10 @@ test('AdminCustomersController: blocked debe ser booleano e id entero positivo',
   assert.equal((await c.setBlocked('2', { blocked: true })).blocked, true);
 });
 
-test('CORS: permite Authorization y PATCH', () => {
+test('CORS: permite Authorization, PATCH, PUT y DELETE', () => {
   const o = corsOptions();
   assert.ok(o.allowedHeaders.includes('Authorization'));
   assert.ok(o.allowedHeaders.includes('Content-Type'));
   assert.ok(o.allowedHeaders.includes('ngrok-skip-browser-warning'));
-  assert.deepEqual(o.methods, ['GET', 'HEAD', 'POST', 'PATCH', 'OPTIONS']);
+  assert.deepEqual(o.methods, ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']); // PUT y DELETE: el panel de admin publicado llama directo
 });
