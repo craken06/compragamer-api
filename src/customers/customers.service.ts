@@ -15,7 +15,19 @@ export interface PublicCustomer {
   billingName: string | null;
 }
 
-export interface LoginProfile { sub: string; email: string; name: string; picture: string | null }
+export interface LoginProfile { sub: string; email: string; name: string; picture: string | null; hd?: string | null }
+
+/**
+ * Google solo es dueño del email en Gmail y en Google Workspace (token con `hd`). En una cuenta de
+ * Google creada con un email de otro dominio, email_verified dice que se verificó alguna vez, no que
+ * la persona lo siga controlando (dominio vencido, ex empleado): no alcanza para entrar a una cuenta ajena.
+ */
+export function canLinkByEmail(provider: string, profile: LoginProfile): boolean {
+  if (provider !== 'google') return false;
+  return /@(gmail|googlemail)\.com$/.test(profile.email) || (typeof profile.hd === 'string' && !!profile.hd);
+}
+
+const EMAIL_TAKEN_MESSAGE = 'Ese email ya tiene una cuenta. Ingresá con la cuenta con la que te registraste o escribinos por WhatsApp.';
 
 export interface AdminCustomerRow {
   id: number; name: string; email: string; avatarUrl: string | null; phone: string | null;
@@ -97,6 +109,9 @@ export class CustomersService {
 
       const byEmail = await tx.customer.findUnique({ where: { email: profile.email } });
       if (byEmail) {
+        // el email es único en customers, así que no se puede abrir otra cuenta con él: si el proveedor
+        // no es autoritativo para ese email, se rechaza en vez de vincular (ver canLinkByEmail)
+        if (!canLinkByEmail(provider, profile)) throw new ForbiddenException(byEmail.blocked ? BLOCKED_MESSAGE : EMAIL_TAKEN_MESSAGE);
         // un bloqueado no suma identidades
         if (!byEmail.blocked) {
           await tx.customerIdentity.create({ data: { customerId: byEmail.id, provider, subject: profile.sub, email: profile.email } });

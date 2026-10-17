@@ -31,7 +31,12 @@ const verify = (t: string, extra: Record<string, unknown> = {}) =>
 const rejects = (p: Promise<unknown>) => assert.rejects(p, (e: any) => e instanceof UnauthorizedException && e.message === MSG);
 
 test('comprobante válido devuelve el perfil con el email en minúsculas', async () => {
-  assert.deepEqual(await verify(makeToken()), { sub: '1234', email: 'ana@gmail.com', name: 'Ana Pérez', picture: 'https://x/y.png' });
+  assert.deepEqual(await verify(makeToken()), { sub: '1234', email: 'ana@gmail.com', name: 'Ana Pérez', picture: 'https://x/y.png', hd: null });
+});
+test('cuenta de Google Workspace: devuelve hd en minúsculas; hd vacío o no texto es null', async () => {
+  assert.equal((await verify(makeToken({ email: 'ana@empresa.com', hd: 'Empresa.com' }))).hd, 'empresa.com');
+  assert.equal((await verify(makeToken({ hd: '' }))).hd, null);
+  assert.equal((await verify(makeToken({ hd: 123 }))).hd, null);
 });
 test('aud como arreglo que incluye el clientId se acepta', async () => {
   assert.equal((await verify(makeToken({ aud: ['otro', CLIENT_ID] }))).sub, '1234');

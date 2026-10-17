@@ -15,6 +15,8 @@ export interface GoogleProfile {
   email: string;
   name: string;
   picture: string | null;
+  /** Dominio de Google Workspace (claim `hd`); null en cuentas comunes. */
+  hd: string | null;
 }
 
 const FAIL_MESSAGE = 'No pudimos verificar tu cuenta de Google. Probá de nuevo.';
@@ -105,7 +107,9 @@ export async function verifyGoogleCredential(
     const email = c.email.trim().toLowerCase();
     const name = typeof c.name === 'string' && c.name.trim() ? c.name.trim() : email.split('@')[0];
     const picture = typeof c.picture === 'string' && c.picture ? c.picture : null;
-    return { sub: c.sub, email, name, picture };
+    // con hd, Google administra ese dominio y es autoritativo para el email (sirve para vincular cuentas por email)
+    const hd = typeof c.hd === 'string' && c.hd ? c.hd.toLowerCase() : null;
+    return { sub: c.sub, email, name, picture, hd };
   } catch {
     throw fail();
   }

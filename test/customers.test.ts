@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
-import { CustomersService } from '../src/customers/customers.service';
+import { CustomersService, canLinkByEmail } from '../src/customers/customers.service';
 import { CustomerGuard } from '../src/customers/customer.guard';
 import { CustomerAuthController } from '../src/customers/customer-auth.controller';
 import { Prisma } from '@prisma/client';
@@ -47,7 +47,7 @@ function fakePrisma() {
   };
   return db;
 }
-const profile = { sub: 'g-1', email: 'ana@example.com', name: 'Ana', picture: 'https://pic/a.png' };
+const profile = { sub: 'g-1', email: 'ana@example.com', name: 'Ana', picture: 'https://pic/a.png', hd: null as string | null };
 
 test('alta nueva: crea cliente + identidad y el token es de cliente', async () => {
   const db = fakePrisma();
@@ -85,14 +85,45 @@ test('segundo ingreso con el mismo sub: no crea nada y actualiza nombre, foto y 
   assert.ok(db.customers[0].lastLoginAt > before);
 });
 
-test('mismo email con otro sub o proveedor: agrega identidad al cliente existente', async () => {
+test('mismo email Gmail o de Workspace (hd) con otro sub: agrega identidad al cliente existente', async () => {
+  for (const p of [
+    { ...profile, email: 'ana@gmail.com' },
+    { ...profile, email: 'ana@googlemail.com' },
+    { ...profile, email: 'ana@empresa.com', hd: 'empresa.com' },
+  ]) {
+    const db = fakePrisma();
+    const svc = new CustomersService(db);
+    const a = await svc.loginWithIdentity('google', p);
+    const b = await svc.loginWithIdentity('google', { ...p, sub: 'g-9' });
+    assert.equal(db.customers.length, 1);
+    assert.equal(db.identities.length, 2);
+    assert.equal(b.customer.id, a.customer.id);
+  }
+});
+
+test('mismo email de otro dominio sin hd, o de otro proveedor: no se vincula a la cuenta existente', async () => {
   const db = fakePrisma();
   const svc = new CustomersService(db);
-  const a = await svc.loginWithIdentity('google', profile);
-  const b = await svc.loginWithIdentity('microsoft', { ...profile, sub: 'ms-9' });
+  await svc.loginWithIdentity('google', profile); // ana@example.com, sin hd
+  for (const [prov, p] of [
+    ['google', { ...profile, sub: 'g-otro' }],
+    ['microsoft', { ...profile, sub: 'ms-9' }],
+  ] as const) {
+    await assert.rejects(() => svc.loginWithIdentity(prov, p), (e: any) => e instanceof ForbiddenException && /ya tiene una cuenta/.test(e.message));
+  }
+  assert.equal(db.identities.length, 1);
   assert.equal(db.customers.length, 1);
-  assert.equal(db.identities.length, 2);
-  assert.equal(b.customer.id, a.customer.id);
+  // el dueño original sigue entrando con su sub
+  assert.equal((await svc.loginWithIdentity('google', profile)).customer.email, 'ana@example.com');
+});
+
+test('canLinkByEmail: solo Google y solo Gmail o con hd', () => {
+  assert.equal(canLinkByEmail('google', { ...profile, email: 'x@gmail.com' }), true);
+  assert.equal(canLinkByEmail('google', { ...profile, email: 'x@gmail.com.ar' }), false);
+  assert.equal(canLinkByEmail('google', { ...profile, email: 'x@notgmail.com' }), false);
+  assert.equal(canLinkByEmail('google', { ...profile, hd: 'empresa.com' }), true);
+  assert.equal(canLinkByEmail('google', { ...profile, hd: null }), false);
+  assert.equal(canLinkByEmail('microsoft', { ...profile, email: 'x@gmail.com' }), false);
 });
 
 test('cliente bloqueado: ForbiddenException', async () => {
