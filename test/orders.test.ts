@@ -329,16 +329,18 @@ test('firma del webhook de Mercado Pago', () => {
   if (prev) process.env.MP_WEBHOOK_SECRET = prev;
 });
 
-test('firma del webhook: ts viejo (más de 10 min) o futuro se rechaza; ts en ms también vale', () => {
+test('firma del webhook: ts de más de 3 días (o futuro) se rechaza; un reintento de horas vale; ts en ms también vale', () => {
   const mp = new MercadoPagoClient();
   const prev = process.env.MP_WEBHOOK_SECRET;
   process.env.MP_WEBHOOK_SECRET = 'secreto';
   try {
     const sig = (ts: string) => `ts=${ts},v1=${createHmac('sha256', 'secreto').update(`id:123;request-id:req-1;ts:${ts};`).digest('hex')}`;
     const now = 1_700_000_000_000;
+    const DAY = 24 * 60 * 60_000;
     assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now + 9 * 60_000), true);
-    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now + 11 * 60_000), false);
-    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now - 11 * 60_000), false);
+    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now + 6 * 60 * 60_000), true); // reintento de MP horas después
+    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now + 3 * DAY + 60_000), false);
+    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now - 3 * DAY - 60_000), false);
     assert.equal(mp.verifySignature(sig('1700000000000'), 'req-1', '123', now + 60_000), true);
     assert.equal(mp.verifySignature(sig('abc'), 'req-1', '123', now), false);
   } finally {

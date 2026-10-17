@@ -9,8 +9,10 @@ import { createHmac, timingSafeEqual } from 'crypto';
  */
 
 const MP_API = 'https://api.mercadopago.com';
-// antigüedad máxima del ts firmado: frena el reenvío de una notificación vieja capturada
-export const WEBHOOK_MAX_AGE_MS = 10 * 60 * 1000;
+// antigüedad máxima del ts firmado: frena el reenvío de una notificación vieja capturada.
+// Amplia a propósito: MP reintenta durante días si la API no respondió (Render gratis se duerme),
+// y reenviar una notificación vieja solo hace que se vuelva a consultar el mismo pago a MP.
+export const WEBHOOK_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
 export interface PreferenceItem { id: string; title: string; quantity: number; unit_price: number }
 export interface MpPayment { id: number; status: string; status_detail?: string; external_reference?: string; transaction_amount?: number; currency_id?: string }
