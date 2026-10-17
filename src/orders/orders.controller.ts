@@ -15,6 +15,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 @Controller()
 export class OrdersController {
   private limiter = new RateLimiter(10, 60 * 60 * 1000, 'Demasiados pedidos seguidos. Escribinos por WhatsApp.');
+  // además del límite por IP, uno por cuenta: con varias IPs no se puede llenar el panel de cotizaciones
+  private customerLimiter = new RateLimiter(20, 24 * 60 * 60 * 1000, 'Llegaste al máximo de pedidos por hoy. Escribinos por WhatsApp.');
+  // cada notificación consulta el pago a MP: sin tope, una inundación agota el rate limit de MP de la cuenta.
+  // Es amplio para no frenar nunca las notificaciones reales.
+  private webhookLimiter = new RateLimiter(120, 60 * 1000, 'Demasiadas notificaciones.');
 
   constructor(
     private readonly orders: OrdersService,
@@ -27,6 +32,7 @@ export class OrdersController {
   @UseGuards(CustomerGuard)
   create(@Req() req: any, @Body() body: CreateOrderRequest, @Ip() ip: string) {
     this.limiter.check(ip);
+    this.customerLimiter.check(String(req.customer.id));
     return this.orders.create(req.customer, body ?? ({} as CreateOrderRequest));
   }
 
@@ -76,7 +82,9 @@ export class OrdersController {
     @Query() query: Record<string, string>,
     @Headers('x-signature') signature?: string,
     @Headers('x-request-id') requestId?: string,
+    @Ip() ip?: string,
   ) {
+    this.webhookLimiter.check(ip ?? '');
     const type = body?.type ?? query.type ?? query.topic;
     const id = String(body?.data?.id ?? query['data.id'] ?? query.id ?? '');
     if (type !== 'payment') return { ignored: type ?? 'sin tipo' };

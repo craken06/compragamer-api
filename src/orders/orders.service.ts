@@ -22,6 +22,7 @@ export interface CreateOrderRequest {
 export type AdminOrderFilter = 'para_preparar' | 'todos' | 'pendientes_pago' | 'entregados';
 
 const MAX_ITEMS = 50;
+const MAX_QTY = 999; // unidades por producto en un pedido
 const NOT_FOUND = 'Pedido no encontrado';
 
 // Filtros del panel (spec 4.8)
@@ -91,10 +92,14 @@ export class OrdersService {
     const qtyById = new Map<number, number>();
     for (const l of lines) {
       const id = Number(l?.productId), qty = Math.round(Number(l?.qty));
-      if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(qty) || qty < 1 || qty > 999) {
+      if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(qty) || qty < 1 || qty > MAX_QTY) {
         throw new BadRequestException('Hay un producto o una cantidad inválida en el pedido.');
       }
       qtyById.set(id, (qtyById.get(id) ?? 0) + qty);
+    }
+    // el tope va sobre el total por producto: si no, repetir la línea lo saltea (50 × 999)
+    if ([...qtyById.values()].some((q) => q > MAX_QTY)) {
+      throw new BadRequestException(`Se pueden pedir hasta ${MAX_QTY} unidades de cada producto.`);
     }
 
     // entrega y facturación (las validaciones lanzan 400 con el mensaje para el usuario)
@@ -243,7 +248,9 @@ export class OrdersService {
 
     let status = MP_STATUS[payment.status] ?? order.status;
     // un pago aprobado tiene que cubrir el total y ser en pesos; si no, queda para revisar a mano
-    if (status === 'pagado' && (payment.currency_id !== 'ARS' || Number(payment.transaction_amount) + 0.01 < Number(order.totalArs))) {
+    // sin monto o con un monto no numérico tampoco: Number(undefined) + 0.01 < total da false y pasaría
+    const paid = payment.transaction_amount == null ? NaN : Number(payment.transaction_amount);
+    if (status === 'pagado' && (payment.currency_id !== 'ARS' || !Number.isFinite(paid) || paid + 0.01 < Number(order.totalArs))) {
       this.logger.error(`Pago ${payment.id} aprobado por ${payment.transaction_amount} ${payment.currency_id} no coincide con el pedido ${ref} (${order.totalArs} ARS)`);
       status = 'pendiente_pago';
     }

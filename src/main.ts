@@ -29,8 +29,14 @@ async function bootstrap() {
   }
   if (!process.env.MP_ACCESS_TOKEN) {
     console.warn('⚠️  MP_ACCESS_TOKEN no está definida: los pedidos se guardan como cotización (sin pago online).');
-  } else if (!process.env.FRONTEND_URL || !process.env.API_PUBLIC_URL) {
-    console.warn('⚠️  Mercado Pago necesita FRONTEND_URL (vuelta del pago) y API_PUBLIC_URL (webhook).');
+  } else {
+    if (!process.env.FRONTEND_URL || !process.env.API_PUBLIC_URL) {
+      console.warn('⚠️  Mercado Pago necesita FRONTEND_URL (vuelta del pago) y API_PUBLIC_URL (webhook).');
+    }
+    if (!process.env.MP_WEBHOOK_SECRET) {
+      console.warn('⚠️  MP_WEBHOOK_SECRET no está definida: el webhook de Mercado Pago acepta notificaciones SIN firma. '
+        + 'Copiá la clave secreta de Webhooks del panel de MP en MP_WEBHOOK_SECRET.');
+    }
   }
   app.enableCors(corsOptions());
 

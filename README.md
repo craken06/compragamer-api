@@ -156,6 +156,8 @@ npm test                                         # tests del motor, calculadoras
 1. Crear la aplicación en https://www.mercadopago.com.ar/developers y copiar el *Access Token* (primero el de prueba).
 2. Cargar `MP_ACCESS_TOKEN`, `FRONTEND_URL` y `API_PUBLIC_URL`.
 3. En *Webhooks* de la aplicación: URL `<API_PUBLIC_URL>/payments/webhook`, evento **Pagos**; copiar la clave secreta en `MP_WEBHOOK_SECRET`.
+   Con la clave cargada, se rechazan las notificaciones sin firma válida o con la firma de hace más de 10 minutos.
+   Sin ella se aceptan sin firma (el pago igual se consulta a MP) y al arrancar se avisa en el log. El webhook tiene un límite de 120 requests por minuto por IP.
 4. Probar con las tarjetas de prueba de MP antes de pasar a las credenciales productivas.
 
 ---

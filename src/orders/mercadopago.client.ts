@@ -9,6 +9,8 @@ import { createHmac, timingSafeEqual } from 'crypto';
  */
 
 const MP_API = 'https://api.mercadopago.com';
+// antigüedad máxima del ts firmado: frena el reenvío de una notificación vieja capturada
+export const WEBHOOK_MAX_AGE_MS = 10 * 60 * 1000;
 
 export interface PreferenceItem { id: string; title: string; quantity: number; unit_price: number }
 export interface MpPayment { id: number; status: string; status_detail?: string; external_reference?: string; transaction_amount?: number; currency_id?: string }
@@ -64,9 +66,11 @@ export class MercadoPagoClient {
   /**
    * Valida el header x-signature de la notificación ("ts=...,v1=...") según la doc de MP:
    * HMAC-SHA256(secret, "id:<data.id>;request-id:<x-request-id>;ts:<ts>;").
-   * Si no hay MP_WEBHOOK_SECRET configurado devuelve true (igual se consulta el pago a MP).
+   * Además el ts firmado tiene que ser reciente (WEBHOOK_MAX_AGE_MS, en segundos o milisegundos).
+   * Si no hay MP_WEBHOOK_SECRET configurado devuelve true (igual se consulta el pago a MP, y al
+   * arrancar se avisa que falta).
    */
-  verifySignature(signature: string | undefined, requestId: string | undefined, dataId: string): boolean {
+  verifySignature(signature: string | undefined, requestId: string | undefined, dataId: string, now = Date.now()): boolean {
     const secret = process.env.MP_WEBHOOK_SECRET;
     if (!secret) return true;
     if (!signature) return false;
@@ -75,6 +79,14 @@ export class MercadoPagoClient {
     const manifest = `id:${dataId.toLowerCase()};request-id:${requestId ?? ''};ts:${parts.ts};`;
     const expected = Buffer.from(createHmac('sha256', secret).update(manifest).digest('hex'));
     const given = Buffer.from(parts.v1);
-    return expected.length === given.length && timingSafeEqual(expected, given);
+    if (expected.length !== given.length || !timingSafeEqual(expected, given)) return false;
+    // la firma es válida: se controla que no sea una notificación vieja reenviada
+    const ts = Number(parts.ts);
+    const tsMs = ts > 1e12 ? ts : ts * 1000;
+    if (!Number.isFinite(ts) || Math.abs(now - tsMs) > WEBHOOK_MAX_AGE_MS) {
+      this.logger.warn(`Webhook de MP con firma válida pero ts fuera de ventana (ts=${parts.ts}, pago ${dataId}): rechazado`);
+      return false;
+    }
+    return true;
   }
 }

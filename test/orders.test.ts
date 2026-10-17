@@ -320,10 +320,77 @@ test('firma del webhook de Mercado Pago', () => {
   process.env.MP_WEBHOOK_SECRET = 'secreto';
   const ts = '1700000000';
   const v1 = createHmac('sha256', 'secreto').update(`id:123;request-id:req-1;ts:${ts};`).digest('hex');
-  assert.equal(mp.verifySignature(`ts=${ts},v1=${v1}`, 'req-1', '123'), true);
-  assert.equal(mp.verifySignature(`ts=${ts},v1=${v1}`, 'req-2', '123'), false);
-  assert.equal(mp.verifySignature(undefined, 'req-1', '123'), false);
+  const now = Number(ts) * 1000 + 5000; // 5 s después de firmada
+  assert.equal(mp.verifySignature(`ts=${ts},v1=${v1}`, 'req-1', '123', now), true);
+  assert.equal(mp.verifySignature(`ts=${ts},v1=${v1}`, 'req-2', '123', now), false);
+  assert.equal(mp.verifySignature(undefined, 'req-1', '123', now), false);
   delete process.env.MP_WEBHOOK_SECRET;
   assert.equal(mp.verifySignature(undefined, undefined, '123'), true);
   if (prev) process.env.MP_WEBHOOK_SECRET = prev;
+});
+
+test('firma del webhook: ts viejo (más de 10 min) o futuro se rechaza; ts en ms también vale', () => {
+  const mp = new MercadoPagoClient();
+  const prev = process.env.MP_WEBHOOK_SECRET;
+  process.env.MP_WEBHOOK_SECRET = 'secreto';
+  try {
+    const sig = (ts: string) => `ts=${ts},v1=${createHmac('sha256', 'secreto').update(`id:123;request-id:req-1;ts:${ts};`).digest('hex')}`;
+    const now = 1_700_000_000_000;
+    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now + 9 * 60_000), true);
+    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now + 11 * 60_000), false);
+    assert.equal(mp.verifySignature(sig('1700000000'), 'req-1', '123', now - 11 * 60_000), false);
+    assert.equal(mp.verifySignature(sig('1700000000000'), 'req-1', '123', now + 60_000), true);
+    assert.equal(mp.verifySignature(sig('abc'), 'req-1', '123', now), false);
+  } finally {
+    if (prev === undefined) delete process.env.MP_WEBHOOK_SECRET; else process.env.MP_WEBHOOK_SECRET = prev;
+  }
+});
+
+test('webhook: sin MP_WEBHOOK_SECRET sigue aceptando notificaciones sin firma (el pago se consulta a MP)', async () => {
+  const prev = process.env.MP_WEBHOOK_SECRET;
+  delete process.env.MP_WEBHOOK_SECRET;
+  try {
+    const db = fakePrisma(products);
+    const { code } = await svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+    const mp = fakeMp({ id: 11, status: 'approved', external_reference: code, transaction_amount: 100000, currency_id: 'ARS' });
+    const ctrl = new OrdersController(svcOf(db, mp), new MercadoPagoClient(), {} as any);
+    assert.equal((await ctrl.webhook({ type: 'payment', data: { id: '11' } }, {}, undefined, undefined, '1.1.1.1') as any).status, 'pagado');
+  } finally {
+    if (prev !== undefined) process.env.MP_WEBHOOK_SECRET = prev;
+  }
+});
+
+test('webhook: límite de 120 por minuto por IP (otra IP no se ve afectada)', async () => {
+  const ctrl = new OrdersController(svcOf(fakePrisma(products)), new MercadoPagoClient(), {} as any);
+  for (let i = 0; i < 120; i++) await ctrl.webhook({ type: 'merchant_order' }, {}, undefined, undefined, '6.6.6.6');
+  await assert.rejects(ctrl.webhook({ type: 'merchant_order' }, {}, undefined, undefined, '6.6.6.6'), (e: any) => e.getStatus() === 429);
+  assert.deepEqual(await ctrl.webhook({ type: 'merchant_order' }, {}, undefined, undefined, '7.7.7.7'), { ignored: 'merchant_order' });
+});
+
+test('webhook: pago aprobado sin monto o con monto no numérico -> no se marca pagado', async () => {
+  const db = fakePrisma(products);
+  const { code } = await svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+  for (const transaction_amount of [undefined, null, 'abc', Infinity]) {
+    const svc = svcOf(db, fakeMp({ id: 12, status: 'approved', external_reference: code, transaction_amount, currency_id: 'ARS' }));
+    assert.equal((await svc.handlePaymentNotification('12')).status, 'pendiente_pago');
+  }
+  assert.equal(db.orders[0].status, 'pendiente_pago');
+});
+
+test('pedido: el tope de 999 unidades va sobre el total por producto (líneas repetidas se suman)', async () => {
+  const svc = svcOf(fakePrisma(products));
+  await assert.rejects(svc.create(ana, { ...base, items: [{ productId: 1, qty: 999 }, { productId: 1, qty: 1 }] }), /hasta 999 unidades/);
+  const r = await svc.create(ana, { ...base, items: [{ productId: 1, qty: 500 }, { productId: 1, qty: 499 }] });
+  assert.ok(r.code);
+});
+
+test('POST /orders: límite de 20 pedidos por día por cliente aunque cambie la IP', async () => {
+  const db = fakePrisma(products);
+  const ctrl = new OrdersController(svcOf(db), fakeMp(), {} as any);
+  const req = { customer: ana };
+  for (let i = 0; i < 20; i++) await ctrl.create(req, { ...base, items: [{ productId: 1, qty: 1 }] }, `10.0.0.${i}`);
+  // create no es async: el 429 sale al llamarlo, por eso va dentro de una función
+  await assert.rejects(async () => ctrl.create(req, { ...base, items: [{ productId: 1, qty: 1 }] }, '10.0.1.1'), (e: any) => e.getStatus() === 429);
+  // otro cliente no comparte el contador
+  await ctrl.create({ customer: { id: 8, name: 'Beto', email: 'b@x.com' } }, { ...base, items: [{ productId: 1, qty: 1 }] }, '10.0.1.2');
 });
