@@ -12,10 +12,11 @@ const path = require('path');
 require('ts-node').register({ transpileOnly: true });
 const { PrismaClient } = require('@prisma/client');
 const { DEFAULT_RULES, DEFAULT_PARAMS } = require('../src/compatibility/engine');
+const { generateOrderCode } = require('../src/orders/order-code');
 
 const APPLY = process.argv.includes('--apply');
 const DIR = path.join(__dirname, '..', 'prisma', 'manual-migrations');
-const NEW_TABLES = ['compatibility_rules', 'orders', 'order_items', 'contact_messages'];
+const NEW_TABLES = ['compatibility_rules', 'orders', 'order_items', 'contact_messages', 'customers', 'customer_identities'];
 
 // Campos que se suman al spec_schema de "proteccion" para que el motor pueda validar las DC.
 const PROTECCION_PROPS = {
@@ -73,10 +74,29 @@ async function main() {
   const newProtProps = Object.fromEntries(Object.entries(PROTECCION_PROPS).filter(([k]) => !protProps[k]));
   console.log(`spec_schema de proteccion: ${Object.keys(newProtProps).length ? 'se agregan ' + Object.keys(newProtProps).join(', ') : 'sin cambios'}`);
 
+  // Pedidos sin código: si la columna todavía no existe (simulación antes de aplicar), son todos.
+  const hasCodeCol = (await prisma.$queryRaw`SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'code'`).length > 0;
+  const ordersExist = existing.includes('orders');
+  const noCode = !ordersExist ? 0
+    : hasCodeCol ? Number((await prisma.$queryRaw`SELECT COUNT(*)::int AS n FROM orders WHERE code IS NULL`)[0].n)
+    : Number((await prisma.$queryRaw`SELECT COUNT(*)::int AS n FROM orders`)[0].n);
+  console.log(`Pedidos sin código: ${noCode}`);
+
   if (!APPLY) { await prisma.$disconnect(); return; }
 
   await prisma.$transaction(async (tx) => {
     for (const { s } of statements) await tx.$executeRawUnsafe(s);
+    // Códigos AX- para los pedidos que no tienen; recién después la columna pasa a NOT NULL.
+    // (un choque abortaría la transacción en Postgres, así que se evita de antemano con un Set)
+    const usados = new Set((await tx.$queryRaw`SELECT code FROM orders WHERE code IS NOT NULL`).map((r) => r.code));
+    const sinCodigo = await tx.$queryRaw`SELECT id FROM orders WHERE code IS NULL`;
+    for (const { id } of sinCodigo) {
+      let code;
+      do { code = generateOrderCode(); } while (usados.has(code));
+      usados.add(code);
+      await tx.$executeRaw`UPDATE orders SET code = ${code} WHERE id = ${id}`;
+    }
+    await tx.$executeRawUnsafe('ALTER TABLE orders ALTER COLUMN code SET NOT NULL');
     if (!ruleCount) await tx.compatibilityRule.createMany({ data: seed });
     if (prot && Object.keys(newProtProps).length) {
       await tx.category.update({ where: { id: prot.id }, data: { specSchema: { ...prot.specSchema, properties: { ...protProps, ...newProtProps } } } });

@@ -16,12 +16,12 @@ enum StockStatus {
 }
 
 model Category {
-  id         Int      @id @default(autoincrement())
-  slug       String   @unique
+  id         Int       @id @default(autoincrement())
+  slug       String    @unique
   name       String
-  specSchema Json?    @map("spec_schema")
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  specSchema Json?     @map("spec_schema")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
   products   Product[]
 
   @@map("categories")
@@ -76,23 +76,76 @@ enum OrderStatus {
   @@map("order_status_enum")
 }
 
-model Order {
-  id            Int         @id @default(autoincrement())
-  publicId      String      @unique @map("public_id")
-  status        OrderStatus @default(pendiente_pago)
-  customerName  String      @map("customer_name")
-  customerEmail String      @map("customer_email")
-  customerPhone String?     @map("customer_phone")
-  notes         String?
-  totalArs      Decimal     @map("total_ars") @db.Decimal(14, 2)
-  usdArsRate    Decimal     @map("usd_ars_rate") @db.Decimal(12, 4)
-  mpPreferenceId String?    @map("mp_preference_id")
-  mpPaymentId   String?     @map("mp_payment_id")
-  mpStatus      String?     @map("mp_status")
-  createdAt     DateTime    @default(now()) @map("created_at")
-  updatedAt     DateTime    @updatedAt @map("updated_at")
-  items         OrderItem[]
+enum FulfillmentStatus {
+  pendiente
+  preparando
+  enviado
+  listo_para_retirar
+  entregado
 
+  @@map("fulfillment_status_enum")
+}
+
+model Customer {
+  id             Int                @id @default(autoincrement())
+  email          String             @unique
+  name           String
+  avatarUrl      String?            @map("avatar_url")
+  phone          String?
+  defaultAddress Json?              @map("default_address")
+  billingDoc     String?            @map("billing_doc")
+  billingName    String?            @map("billing_name")
+  blocked        Boolean            @default(false)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  lastLoginAt    DateTime           @default(now()) @map("last_login_at") @db.Timestamptz
+  identities     CustomerIdentity[]
+  orders         Order[]
+
+  @@map("customers")
+}
+
+model CustomerIdentity {
+  id         Int      @id @default(autoincrement())
+  customerId Int      @map("customer_id")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  provider   String // google | microsoft
+  subject    String
+  email      String
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([provider, subject])
+  @@index([customerId])
+  @@map("customer_identities")
+}
+
+model Order {
+  id                Int               @id @default(autoincrement())
+  publicId          String            @unique @map("public_id")
+  code              String            @unique // AX-XXXXXX
+  status            OrderStatus       @default(pendiente_pago)
+  customerName      String            @map("customer_name")
+  customerEmail     String            @map("customer_email")
+  customerPhone     String?           @map("customer_phone")
+  notes             String?
+  totalArs          Decimal           @map("total_ars") @db.Decimal(14, 2)
+  usdArsRate        Decimal           @map("usd_ars_rate") @db.Decimal(12, 4)
+  mpPreferenceId    String?           @map("mp_preference_id")
+  mpPaymentId       String?           @map("mp_payment_id")
+  mpStatus          String?           @map("mp_status")
+  customerId        Int?              @map("customer_id")
+  customer          Customer?         @relation(fields: [customerId], references: [id])
+  deliveryMethod    String?           @map("delivery_method") // envio | retiro
+  shippingAddress   Json?             @map("shipping_address")
+  billingDoc        String?           @map("billing_doc")
+  billingName       String?           @map("billing_name")
+  fulfillmentStatus FulfillmentStatus @default(pendiente) @map("fulfillment_status")
+  trackingNumber    String?           @map("tracking_number")
+  paymentUrl        String?           @map("payment_url")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  items             OrderItem[]
+
+  @@index([customerId])
   @@map("orders")
 }
 

@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExchangeRateService } from '../exchange-rate/exchange-rate.service';
 import { MercadoPagoClient } from './mercadopago.client';
+import { withUniqueCode } from './order-code';
 
 export interface CreateOrderRequest {
   customer: { name: string; email: string; phone?: string };
@@ -72,15 +73,15 @@ export class OrdersService {
 
     const quote = req.mode === 'cotizacion' || !this.mp.enabled;
     const publicId = randomUUID();
-    const order = await this.prisma.order.create({
+    const order = await withUniqueCode((code) => this.prisma.order.create({
       data: {
-        publicId, customerName: name, customerEmail: email, customerPhone: phone,
+        publicId, code, customerName: name, customerEmail: email, customerPhone: phone,
         notes: req.notes ? String(req.notes).slice(0, 1000) : null,
         status: quote ? 'cotizacion' : 'pendiente_pago',
         totalArs: new Prisma.Decimal(total), usdArsRate: new Prisma.Decimal(usdArs),
         items: { create: items.map((i) => ({ ...i, unitPriceArs: new Prisma.Decimal(i.unitPriceArs) })) },
       },
-    });
+    }));
 
     if (quote) return { publicId, status: order.status, totalArs: total, paymentUrl: null };
 
