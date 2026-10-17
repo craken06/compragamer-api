@@ -33,7 +33,7 @@ export class ProductsController {
     return this.productsService.findOne(id);
   }
 
-  // --- Escritura: requiere el header x-admin-key (ver AdminKeyGuard) ---
+  // --- Escritura: requiere el token de admin (ver AdminKeyGuard) ---
   @Post()
   @UseGuards(AdminKeyGuard)
   create(@Body() dto: CreateProductDto) {

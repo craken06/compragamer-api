@@ -112,7 +112,8 @@ El cliente ingresa con Google; la sesión dura 30 días y viaja en `Authorizatio
 | GET/PATCH | `/me` | Datos de la cuenta (teléfono, dirección, facturación) |
 | GET | `/me/orders`, `/orders/:code` | Pedidos del cliente |
 
-### Administración (requieren `Authorization: Bearer <token>` o `x-admin-key`)
+### Administración (requieren `Authorization: Bearer <token>` de `POST /auth/login`)
+No hay otra credencial: toda función de admin pasa por el usuario y la contraseña del administrador.
 | Método | Ruta | Qué hace |
 |---|---|---|
 | POST | `/auth/login` | `{ user, password }` -> token de 12 h (usuario único: `ADMIN_USER` / `ADMIN_PASSWORD_HASH`) |
@@ -145,7 +146,8 @@ Todos simulan por defecto y sólo escriben con `--apply`:
 node scripts/migrate.js                          # tablas compatibility_rules, orders, order_items, contact_messages + reglas iniciales
 node scripts/backfill-baterias-paneles-micro.js  # tensión/corriente de baterías, tecnología de paneles, Enphase IQ8MC
 node scripts/backfill-inversores-y-categorias.js # (ya aplicado el 2026-10-15)
-node scripts/hash-password.js "contraseña"       # valor de ADMIN_PASSWORD_HASH
+node scripts/hash-password.js                    # pide la contraseña y da el valor de ADMIN_PASSWORD_HASH
+node scripts/check-password.js                   # revisa si una contraseña coincide con un ADMIN_PASSWORD_HASH
 npm test                                         # tests del motor, calculadoras, login y pedidos (sin base ni red); requiere Node 21+ (glob en `node --test`)
 ```
 

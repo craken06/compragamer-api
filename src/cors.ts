@@ -22,7 +22,6 @@ function toOrigin(value: string): string {
  * de administración, que se publica en el mismo dominio que el sitio y llama directo con
  * su token de admin (por eso PUT y DELETE). La seguridad la pone el token, no el origen:
  * va en un header, no en cookies, así que otra página no puede usarlo por el usuario.
- * x-admin-key no se habilita acá: es solo para scripts.
  */
 export function allowedOrigins(): string[] {
   return (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).map(toOrigin);

@@ -11,13 +11,14 @@ const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
 const ctx = (headers: Record<string, string>) =>
   ({ switchToHttp: () => ({ getRequest: () => ({ headers }) }) }) as any;
 
-function withEnv<T>(fn: () => T): T {
+function withEnv<T>(fn: () => T, env: { k?: string; s?: string } = { k: 'clave-admin', s: S }): T {
   const prev = { k: process.env.ADMIN_API_KEY, s: process.env.JWT_SECRET };
-  process.env.ADMIN_API_KEY = 'clave-admin';
-  process.env.JWT_SECRET = S;
+  const set = (name: string, v: string | undefined) => { if (v === undefined) delete process.env[name]; else process.env[name] = v; };
+  set('ADMIN_API_KEY', env.k);
+  set('JWT_SECRET', env.s);
   try { return fn(); } finally {
-    if (prev.k === undefined) delete process.env.ADMIN_API_KEY; else process.env.ADMIN_API_KEY = prev.k;
-    if (prev.s === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = prev.s;
+    set('ADMIN_API_KEY', prev.k);
+    set('JWT_SECRET', prev.s);
   }
 }
 
@@ -47,10 +48,31 @@ test('AdminKeyGuard rechaza token viejo sin role', () => {
   withEnv(() => assert.throws(() => new AdminKeyGuard().canActivate(ctx({ authorization: `Bearer ${t}` })), { name: 'UnauthorizedException' }));
 });
 
-test('AdminKeyGuard acepta token admin y x-admin-key', () => {
+test('AdminKeyGuard acepta token admin', () => {
+  withEnv(() => {
+    assert.equal(new AdminKeyGuard().canActivate(ctx({ authorization: `Bearer ${issueToken('lucas', S)}` })), true);
+  });
+});
+
+test('AdminKeyGuard rechaza x-admin-key aunque ADMIN_API_KEY siga cargada', () => {
+  withEnv(() => {
+    assert.throws(() => new AdminKeyGuard().canActivate(ctx({ 'x-admin-key': 'clave-admin' })), { name: 'UnauthorizedException' });
+  });
+});
+
+test('AdminKeyGuard rechaza request sin credenciales', () => {
+  withEnv(() => assert.throws(() => new AdminKeyGuard().canActivate(ctx({})), { name: 'UnauthorizedException' }));
+});
+
+test('AdminKeyGuard falla cerrado sin JWT_SECRET (aunque haya ADMIN_API_KEY)', () => {
+  const t = issueToken('lucas', S);
   withEnv(() => {
     const g = new AdminKeyGuard();
-    assert.equal(g.canActivate(ctx({ authorization: `Bearer ${issueToken('lucas', S)}` })), true);
-    assert.equal(g.canActivate(ctx({ 'x-admin-key': 'clave-admin' })), true);
-  });
+    assert.throws(() => g.canActivate(ctx({ authorization: `Bearer ${t}` })), { name: 'ForbiddenException' });
+    assert.throws(() => g.canActivate(ctx({ 'x-admin-key': 'clave-admin' })), { name: 'ForbiddenException' });
+  }, { k: 'clave-admin', s: undefined });
+});
+
+test('AdminKeyGuard rechaza token admin firmado con otro secreto', () => {
+  withEnv(() => assert.throws(() => new AdminKeyGuard().canActivate(ctx({ authorization: `Bearer ${issueToken('lucas', 'otro')}` })), { name: 'UnauthorizedException' }));
 });

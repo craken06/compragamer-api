@@ -15,8 +15,11 @@ async function bootstrap() {
   } else {
     console.log(`CORS: orígenes permitidos -> ${origins.join(', ')}`);
   }
-  if (!process.env.ADMIN_API_KEY && !process.env.JWT_SECRET) {
-    console.warn('⚠️  Faltan ADMIN_API_KEY y JWT_SECRET: la administración (escrituras de productos) está deshabilitada.');
+  if (!process.env.JWT_SECRET) {
+    console.warn('⚠️  Falta JWT_SECRET: la administración (escrituras de productos, pedidos, clientes) está deshabilitada.');
+  }
+  if (process.env.ADMIN_API_KEY) {
+    console.warn('⚠️  ADMIN_API_KEY ya no se usa (la administración exige usuario y contraseña): borrala de las variables del servidor.');
   }
   if (!process.env.JWT_SECRET || !process.env.ADMIN_USER || !process.env.ADMIN_PASSWORD_HASH) {
     console.warn('⚠️  Login del panel deshabilitado: faltan JWT_SECRET, ADMIN_USER o ADMIN_PASSWORD_HASH.');

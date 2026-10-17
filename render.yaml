@@ -15,15 +15,12 @@ services:
       # Dominios del frontend permitidos por CORS, separados por coma. Ej: https://craken06.github.io
       - key: CORS_ORIGINS
         sync: false
-      # Clave para scripts/herramientas (header x-admin-key). Render la genera sola.
-      - key: ADMIN_API_KEY
-        generateValue: true
-      # Login del panel de administración
+      # Login del panel de administración (única forma de usar las funciones de admin)
       - key: JWT_SECRET
         generateValue: true
       - key: ADMIN_USER
         sync: false
-      # Generar con: node scripts/hash-password.js "tu contraseña"
+      # Generar con: node scripts/hash-password.js (pide la contraseña)
       - key: ADMIN_PASSWORD_HASH
         sync: false
       # Ingreso de clientes con Google: ID de cliente OAuth (el mismo que usa el sitio)

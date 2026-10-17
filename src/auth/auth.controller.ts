@@ -46,6 +46,6 @@ export class AuthController {
   @Get('me')
   @UseGuards(AdminKeyGuard)
   me(@Req() req: any) {
-    return { user: req.admin ?? 'api-key' };
+    return { user: req.admin };
   }
 }
