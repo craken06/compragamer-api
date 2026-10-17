@@ -57,3 +57,14 @@ test('token: firma, vencimiento y manipulación', () => {
   assert.equal(verifyToken(`${h}.${forged}.${s}`, 's3cret', 1001), null);
   assert.equal(verifyToken('a.b', 's3cret'), null);
 });
+
+test('consumo: name que no es texto (número, objeto, null) no rompe y usa el genérico', () => {
+  const r = consumption([
+    { name: 123 as any, power: 100, qty: 1, hours: 30 },
+    { name: { a: 1 } as any, power: -1, qty: 1, hours: 1 },
+    { name: null as any, power: 10, qty: 1, hours: 1 },
+  ]);
+  assert.ok(r.warnings.some((w) => w.startsWith('el equipo 1:')));
+  assert.ok(r.warnings.some((w) => w.includes('en el equipo 2')));
+  assert.equal(r.result.items, 3);
+});

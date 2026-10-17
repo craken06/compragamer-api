@@ -1,10 +1,14 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Ip, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
 import { AdminKeyGuard } from '../common/admin-key.guard';
+import { RateLimiter } from '../common/rate-limit';
 import { CompatibilityService, EvaluateRequest } from './compatibility.service';
 import { Rule } from './engine';
 
 @Controller()
 export class CompatibilityController {
+  // cada evaluación consulta la base (hasta 301 ids): el tope frena una inundación sin molestar al configurador
+  private limiter = new RateLimiter(120, 60 * 1000, 'Demasiadas consultas seguidas. Probá de nuevo en un minuto.');
+
   constructor(private readonly compatibility: CompatibilityService) {}
 
   // GET /compatibility/rules -> parámetros (temperatura de diseño, márgenes) y reglas activas
@@ -17,7 +21,8 @@ export class CompatibilityController {
   // Sólo lee la base: evalúa con los datos guardados, no con specs que mande el cliente.
   @Post('compatibility/evaluate')
   @HttpCode(200)
-  evaluate(@Body() body: EvaluateRequest) {
+  evaluate(@Body() body: EvaluateRequest, @Ip() ip?: string) {
+    this.limiter.check(ip ?? '');
     return this.compatibility.evaluate(body);
   }
 

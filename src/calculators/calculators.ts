@@ -21,7 +21,8 @@ export function consumption(items: Appliance[]): CalcResult<{ dailyKwh: number; 
   if (!list.length) warnings.push('No hay equipos cargados.');
   let dailyWh = 0;
   list.forEach((it, i) => {
-    const label = it?.name?.trim() || `el equipo ${i + 1}`;
+    // name viene del cliente: si no es texto (número, objeto) se usa el genérico en vez de romper con un 500
+    const label = (typeof it?.name === 'string' && it.name.trim().slice(0, 80)) || `el equipo ${i + 1}`;
     let power = n(it?.power), qty = n(it?.qty), hours = n(it?.hours);
     if (power < 0 || qty < 0 || hours < 0) warnings.push(`Hay valores negativos en ${label}: se tomaron como 0.`);
     power = Math.max(0, power); qty = Math.max(0, qty); hours = Math.max(0, hours);
