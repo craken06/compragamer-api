@@ -105,8 +105,8 @@ test('pedido: código AX-, cliente, envío con dirección normalizada, paymentUr
     assert.equal(o.billingName, 'Ana Pérez');
     assert.equal(o.paymentUrl, 'https://mp.test/checkout');
     assert.equal(mp.calls[0].externalReference, r.code);
-    assert.equal(mp.calls[0].backUrl, `https://auryx.test/#pedido/${r.code}`);
-    assert.ok(mp.calls[0].backUrl.endsWith(`#pedido/${r.code}`));
+    assert.equal(mp.calls[0].backUrl, `https://auryx.test/pedido/${r.code}/`);
+    assert.ok(mp.calls[0].backUrl.endsWith(`/pedido/${r.code}/`));
     assert.deepEqual(Object.keys(r).sort(), ['code', 'paymentUrl', 'status', 'totalArs']);
   } finally {
     if (prev === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = prev;

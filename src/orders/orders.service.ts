@@ -167,7 +167,7 @@ export class OrdersService {
         externalReference: code,
         items: items.map((i) => ({ id: String(i.productId), title: i.productName, quantity: i.quantity, unit_price: i.unitPriceArs })),
         payerEmail: email, payerName: name,
-        backUrl: `${frontend}/#pedido/${code}`,
+        backUrl: `${frontend}/pedido/${code}/`,
         notificationUrl: apiPublic ? `${apiPublic}/payments/webhook` : undefined,
       });
       // se guarda el link para el botón "Pagar" de un pedido pendiente
