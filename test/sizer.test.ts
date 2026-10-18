@@ -78,3 +78,14 @@ test('entradas: solo campos conocidos, rangos acotados y valores de lista intact
   assert.throws(() => cleanInputs({ cons: { $gt: 1 } }), /no es válido/);
   assert.throws(() => cleanInputs(null), /Faltan/);
 });
+
+test('bajar la factura: dimensiona por el ahorro pedido (70 % de ahorro pide ~105 % de cobertura)', () => {
+  // cada kWh generado ahorra 0,5 + 0,5 × 0,33 = 0,665 kWh de factura: 70 % / 0,665 = 105 % del consumo
+  const r: any = sizer.quick(cleanInputs({ cons: '450', hsp: '4.4', goal: 'red', save: '70' }));
+  assert.equal(r.ok, true);
+  assert.ok(r.coverage >= 105.2 && r.coverage < 130, `cobertura ${r.coverage}`);
+  // el campo anterior (cobertura) se sigue aceptando
+  const old: any = sizer.quick(cleanInputs({ cons: '450', hsp: '4.4', goal: 'red', cover: '70' }));
+  assert.ok(old.coverage >= 70 && old.coverage < r.coverage);
+  assert.ok((sizer.quick(cleanInputs({ cons: '450', goal: 'red', save: '0' })) as any).empty.includes('ahorrar'));
+});

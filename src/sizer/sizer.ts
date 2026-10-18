@@ -139,6 +139,9 @@ const SIZER_GOAL_TYPE: Record<string, string> = { red: 'on', resp: 'hib', aut: '
 const SIZER_PR = 0.8;          // rendimiento global del sistema
 const SIZER_DOD = 0.9;         // profundidad de descarga de la batería
 const SIZER_CELL_RISE = 25;    // °C que la celda supera al ambiente a pleno sol
+// ahorro por kWh generado sin batería: 50 % se consume en el momento y el resto se inyecta a ~33 % de la tarifa
+// (los mismos supuestos que el retorno estimado del sitio)
+const SIZER_SAVE_PER_KWH = 0.5 + 0.5 * 0.33;
 
 /* ---------------------------------------------------------------------- */
 /* Utilidades                                                              */
@@ -208,8 +211,8 @@ export class Sizer {
     const cons = sizerNum(q.cons);
     const hsp = sizerNum(q.hsp);
     if (cons <= 0) return { empty: 'Ingresá tu consumo mensual para ver el sistema sugerido.' };
-    const frac = sizerGoalFraction(q.goal, sizerNum(q.cover), 0.8);
-    if (frac <= 0) return { empty: 'Indicá qué porcentaje del consumo querés cubrir.' };
+    const frac = sizerGoalFraction(q, 0.8);
+    if (frac <= 0) return { empty: 'Indicá qué porcentaje de tu factura querés ahorrar.' };
 
     const loc = sizerLocation(q.hsp);
     const env = sizerEnv(loc.tmin, loc.tmax);
@@ -284,7 +287,7 @@ export class Sizer {
     const cons = sizerNum(cu.cons);
     const hsp = sizerNum(cu.hsp);
     if (cons <= 0) return { empty: 'Ingresá tu consumo mensual para calcular las cantidades.' };
-    if (sizerGoalFraction(cu.goal, sizerNum(cu.cover), 0.85) <= 0) return { empty: 'Indicá qué porcentaje del consumo querés cubrir.' };
+    if (sizerGoalFraction(cu, 0.85) <= 0) return { empty: 'Indicá qué porcentaje de tu factura querés ahorrar.' };
     const { inv, nInv, plan, pan, env, t, crit, backup } = this.customSizing(cu);
     if (!inv) return { empty: 'No hay inversores en el catálogo para esa combinación. Cambiá el objetivo o la conexión.' };
     if (t.nArea < 1) return { empty: 'Con esa superficie no entra ni un panel. Revisá los m² libres.' };
@@ -328,9 +331,16 @@ export class Sizer {
 
 const sizerCheaper = (a: any, b: any) => a.short < b.short || (a.short === b.short && a.cost < b.cost);
 
-function sizerGoalFraction(goal: string, cover: number, backupFraction: number) {
-  if (goal === 'red') return Math.min(100, Math.max(0, cover)) / 100;
-  return goal === 'resp' ? backupFraction : 1.2;
+/* Fracción del consumo que tiene que generar el sistema. Para bajar la factura el usuario elige qué parte
+   de la factura quiere ahorrar ("save", %): cada kWh generado ahorra SIZER_SAVE_PER_KWH de factura (lo que se
+   consume en el momento vale entero, lo inyectado a precio mayorista), así que se genera ahorro / SIZER_SAVE_PER_KWH.
+   Sin "save" se toma "cover" (% de cobertura del consumo), el campo del formulario anterior. */
+function sizerGoalFraction(st: any, backupFraction: number) {
+  if (st.goal === 'red') {
+    if (st.save === undefined) return Math.min(100, Math.max(0, sizerNum(st.cover))) / 100;
+    return Math.min(100, Math.max(0, sizerNum(st.save))) / 100 / SIZER_SAVE_PER_KWH;
+  }
+  return st.goal === 'resp' ? backupFraction : 1.2;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -559,7 +569,7 @@ function sizerMinimumNote(r: any) {
 /* Paneles objetivo del personalizado: lo que pide el consumo, recortado por la superficie. */
 function sizerCustomTargets(cu: any, pan: any) {
   const cons = sizerNum(cu.cons);
-  const frac = sizerGoalFraction(cu.goal, sizerNum(cu.cover), 0.85);
+  const frac = sizerGoalFraction(cu, 0.85);
   const ori = sizerNum(cu.ori) || 1;
   const hsp = sizerNum(cu.hsp) || 1;
   const kwpReq = (cons * frac) / (30 * hsp * SIZER_PR * ori);

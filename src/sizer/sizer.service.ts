@@ -5,10 +5,10 @@ import { Sizer, SizerProduct, buildSizerCatalog } from './sizer';
 
 const CATALOG_CACHE_MS = 60 * 1000;
 // los campos que carga el formulario; cualquier otro se descarta
-const FIELDS = ['cons', 'hsp', 'goal', 'cover', 'hours', 'days', 'phase', 'crit', 'area', 'est', 'ori', 'tmin', 'tmax', 'pan', 'inv', 'bat'];
+const FIELDS = ['cons', 'hsp', 'goal', 'save', 'cover', 'hours', 'days', 'phase', 'crit', 'area', 'est', 'ori', 'tmin', 'tmax', 'pan', 'inv', 'bat'];
 // topes amplios: alcanzan para cualquier caso real y evitan cálculos sin sentido
 const LIMITS: Record<string, [number, number]> = {
-  cons: [0, 1_000_000], cover: [0, 100], hours: [0, 240], days: [0, 30], crit: [0, 10_000],
+  cons: [0, 1_000_000], save: [0, 100], cover: [0, 100], hours: [0, 240], days: [0, 30], crit: [0, 10_000],
   area: [0, 1_000_000], tmin: [-60, 40], tmax: [-20, 70],
 };
 
