@@ -80,3 +80,19 @@ test('evaluate: un producto inactivo o inexistente no se evalúa (igual que ante
   assert.ok(r.converters[2]);
   assert.equal(99 in r.converters, false);
 });
+
+test('evaluate: cada batería trae minQty (cuántas hacen falta) además del veredicto a la cantidad pedida', async () => {
+  const { state, prisma } = fakePrisma();
+  state.products.push(
+    { id: 3, name: 'Híbrido 6k', active: true, category: { slug: 'inversor' }, specs: { maxPvVoltage: 600, batteryVoltageMin: 40, batteryVoltageMax: 60, ratedPowerAC: 6000 } },
+    { id: 4, name: 'Batería 48 V 37 A', active: true, category: { slug: 'bateria' }, specs: { nominalVoltage: 48, maxContinuousCurrent: 37 } },
+    { id: 5, name: 'Batería HV', active: true, category: { slug: 'bateria' }, specs: { nominalVoltage: 400, maxContinuousCurrent: 25 } },
+  );
+  const svc = new CompatibilityService(prisma as any);
+  const r = await svc.evaluate({ ...req, converterIds: [3], converterId: 3, batteryIds: [4, 5, 2], batteryQty: 1 });
+  assert.equal(r.batteries[4]!.status, 'warning');
+  assert.equal(r.batteries[4]!.minQty, 4);
+  assert.equal(r.batteries[5]!.status, 'bad');
+  assert.equal(r.batteries[5]!.minQty, null);
+  assert.equal(2 in r.batteries, false); // un inversor no es batería
+});

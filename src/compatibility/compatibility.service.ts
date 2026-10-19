@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/c
 import { PrismaService } from '../prisma/prisma.service';
 import {
   DEFAULT_RULES, Evaluation, Params, ProductLike, Rule,
-  evaluateBatteryToConverter, evaluateDcItem, evaluatePanelToConverter, paramsFromRules,
+  evaluateBatteryToConverter, evaluateDcItem, evaluatePanelToConverter, minBatteryQty, paramsFromRules,
 } from './engine';
 
 export interface EvaluateRequest {
@@ -160,13 +160,17 @@ export class CompatibilityService implements OnModuleInit {
       const c = byId.get(id);
       if (c) converters[id] = evaluatePanelToConverter(rules, params, panel, qty, wiring, c, sv);
     }
-    const batteries: Record<number, Evaluation | null> = {};
+    // minQty: con cuántas unidades es compatible (null = con ninguna); el sitio la usa para no
+    // marcar como incompatible una batería que solo necesita sumar unidades
+    const batteries: Record<number, (Evaluation & { minQty: number | null }) | null> = {};
     const selectedConverter = selected ? byId.get(selected) : null;
     if (selectedConverter) {
       const bq = Math.max(1, Math.round(Number(req.batteryQty) || 1));
       for (const id of batteryIds) {
         const b = byId.get(id);
-        if (b && b.category === 'bateria') batteries[id] = evaluateBatteryToConverter(rules, params, b, bq, selectedConverter, sv);
+        if (!b || b.category !== 'bateria') continue;
+        const ev = evaluateBatteryToConverter(rules, params, b, bq, selectedConverter, sv);
+        if (ev) batteries[id] = { ...ev, minQty: minBatteryQty(rules, params, b, selectedConverter, sv) };
       }
     }
     const extras: Record<number, Evaluation | null> = {};

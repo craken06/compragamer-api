@@ -139,9 +139,17 @@ export function panelPower(specs: PanelSpecs): number | null {
  * "parallel" = dos strings iguales en paralelo sobre el mismo MPPT (como el configurador).
  * Para microinversores se evalúa un panel por equipo.
  */
-export function arrayMetrics(panel: PanelSpecs, qty: number, wiring: 'series' | 'parallel', params: Params, micro = false) {
+/**
+ * Métricas del arreglo. Las corrientes (iscArray, impArray) son POR MPPT: con 2 strings y un
+ * equipo de 2 MPPT va un string por MPPT; sin el dato (mpptCount) se supone 1 MPPT y los dos
+ * strings en paralelo en la misma entrada (lo conservador). iscDesign es del arreglo completo
+ * (cables y protecciones comunes a los strings).
+ */
+export function arrayMetrics(panel: PanelSpecs, qty: number, wiring: 'series' | 'parallel', params: Params, micro = false, mpptCount = 1) {
   const seriesCount = micro ? 1 : wiring === 'parallel' ? Math.ceil(qty / 2) : qty;
   const stringCount = micro ? 1 : wiring === 'parallel' ? 2 : 1;
+  const mppts = Number.isInteger(mpptCount) && mpptCount > 0 ? mpptCount : 1;
+  const stringsPerMppt = Math.ceil(stringCount / mppts);
   const voc = num(panel.voc), isc = num(panel.isc), vmp = num(panel.vmp), imp = num(panel.imp);
   const coefVoc = num(panel.coef_temp_voc) ?? num(panel.coefTempVoc) ?? params.coefVocDefault;
   const pmax = panelPower(panel);
@@ -155,8 +163,9 @@ export function arrayMetrics(panel: PanelSpecs, qty: number, wiring: 'series' | 
     vocCold: r1(vocCold),
     vmpStc: vmp === null ? null : r1(vmp * seriesCount),
     vmpHot: r1(vmpHot),
-    iscArray: isc === null ? null : r1(isc * stringCount),
-    impArray: imp === null ? null : r1(imp * stringCount),
+    stringsPerMppt,
+    iscArray: isc === null ? null : r1(isc * stringsPerMppt),
+    impArray: imp === null ? null : r1(imp * stringsPerMppt),
     iscDesign: isc === null ? null : r1(isc * stringCount * params.dcSafetyFactor),
     panelPower: pmax,
     arrayPower: pmax === null ? null : pmax * (micro ? 1 : qty),
@@ -177,8 +186,8 @@ export function evaluatePanelToConverter(
 ): Evaluation | null {
   if (!panel || !qty || !converter) return null;
   const kind = converterKind(converter);
-  const m = arrayMetrics(panel.specs, qty, wiring, params, kind === 'microinversor');
   const s = converter.specs || {};
+  const m = arrayMetrics(panel.specs, qty, wiring, params, kind === 'microinversor', num(s.mpptCount) ?? 1);
   const ctx: Ctx = { ...s, ...m };
   if (kind === 'regulador') {
     const byV = s.maxPvPowerBySystemVoltage || {};
@@ -225,6 +234,21 @@ export function evaluateBatteryToConverter(
   const ev = applyRules(rules, 'bateria', kind, ctx);
   if (ev.status === 'ok') ev.messages.push('Compatible con la configuración elegida.');
   return ev;
+}
+
+/** Hasta cuántas baterías se prueba para encontrar la cantidad mínima compatible. */
+export const MAX_BATTERY_QTY = 8;
+
+/**
+ * Cantidad mínima de baterías (1..MAX_BATTERY_QTY) con la que el banco es compatible con el equipo,
+ * o null si no lo es con ninguna (tensión fuera de rango, faltan datos...). Lo que depende de la
+ * cantidad (la descarga del banco frente a la potencia del inversor) se resuelve sumando unidades.
+ */
+export function minBatteryQty(rules: Rule[], params: Params, battery: ProductLike, converter: ProductLike, systemVoltage?: number): number | null {
+  for (let q = 1; q <= MAX_BATTERY_QTY; q++) {
+    if (evaluateBatteryToConverter(rules, params, battery, q, converter, systemVoltage)?.status === 'ok') return q;
+  }
+  return null;
 }
 
 /** Cables, conectores y protecciones del lado DC contra el string. */

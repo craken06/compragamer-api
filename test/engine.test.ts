@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_PARAMS, DEFAULT_RULES, arrayMetrics, evaluateBatteryToConverter, evaluateDcItem,
-  evaluatePanelToConverter, paramsFromRules, ruleMatches,
+  evaluatePanelToConverter, minBatteryQty, paramsFromRules, ruleMatches,
 } from '../src/compatibility/engine';
 
 // Datos reales cargados en Neon (Jinko 585 W y Huawei SUN2000-5KTL-L1)
@@ -124,4 +124,42 @@ test('ruleMatches: requires / unless / missing', () => {
   assert.equal(ruleMatches({ metric: 'a', op: '>', ref: 'b', unless: ['c'] }, { a: 2, b: 1, c: 5 }), false);
   assert.equal(ruleMatches({ metric: 'a', op: '>', value: 1, requires: ['z'] }, { a: 2 }), false);
   assert.equal(ruleMatches({ metric: 'a', op: '>', ref: 'b' }, { a: 2 }), false); // sin ref no aplica
+});
+
+test('2 strings en un equipo de 2 MPPT: va un string por MPPT -> la corriente por MPPT es la de un string', () => {
+  const dosMppt = { ...huawei, specs: { ...huawei.specs, mpptCount: 2, maxInputCurrentPerMppt: 16, maxPvPower: 9000, ratedPowerAC: 6000 } };
+  // 10 Jinko en 2 strings de 5: Isc por MPPT 14,07 (no 28,1), Imp 13,38 < 16
+  const ev = evaluatePanelToConverter(R, P, jinko, 10, 'parallel', dosMppt)!;
+  assert.equal(ev.totals!.totalIsc, 14.1);
+  assert.equal(ev.totals!.totalImp, 13.4);
+  assert.ok(!ev.messages.some((m) => m.includes('cortocircuito')));
+  assert.ok(!ev.messages.some((m) => m.includes('recorta')));
+  // en serie no cambia: un solo string
+  assert.equal(evaluatePanelToConverter(R, P, jinko, 10, 'series', dosMppt)!.totals!.totalIsc, 14.1);
+});
+
+test('mpptCount 1, ausente o inválido: los 2 strings van a la misma entrada (como antes)', () => {
+  for (const mpptCount of [1, undefined, 0, 'x']) {
+    const inv = { ...huawei, specs: { ...huawei.specs, mpptCount } };
+    const ev = evaluatePanelToConverter(R, P, jinko, 10, 'parallel', inv)!;
+    assert.equal(ev.totals!.totalIsc, 28.1, String(mpptCount));
+    assert.equal(ev.status, 'bad');
+  }
+});
+
+test('cables y protecciones DC: siguen viendo la corriente de los 2 strings juntos', () => {
+  const m = arrayMetrics(jinko.specs, 10, 'parallel', P, false, 2);
+  assert.equal(m.iscArray, 14.1); // por MPPT
+  assert.equal(m.iscDesign, 35.2); // 2 × 14,07 × 1,25: arreglo completo
+});
+
+test('cantidad mínima de baterías: la que hace falta para la potencia; null si la tensión no entra', () => {
+  const hyb = { category: 'inversor', specs: { batteryVoltageMin: 42, batteryVoltageMax: 59, ratedPowerAC: 6000 } };
+  const pylon = { category: 'bateria', specs: { nominalVoltage: 48, maxContinuousCurrent: 37 } }; // 1776 W por unidad
+  assert.equal(minBatteryQty(R, P, pylon, hyb), 4); // 4 × 1776 = 7104 ≥ 6000; 3 × 1776 = 5328 no
+  assert.equal(minBatteryQty(R, P, { category: 'bateria', specs: { nominalVoltage: 51.2, maxContinuousCurrent: 130 } }, hyb), 1);
+  assert.equal(minBatteryQty(R, P, pylon, huawei), null); // 48 V fuera de 350-560
+  assert.equal(minBatteryQty(R, P, { category: 'bateria', specs: {} }, hyb), null); // sin datos: nunca ✓
+  // ni con 8 alcanza: 8 × 48 × 10 = 3840 W < 6000
+  assert.equal(minBatteryQty(R, P, { category: 'bateria', specs: { nominalVoltage: 48, maxContinuousCurrent: 10 } }, hyb), null);
 });
