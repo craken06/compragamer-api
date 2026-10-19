@@ -9,6 +9,7 @@ import { MercadoPagoClient } from './mercadopago.client';
 import { withUniqueCode } from './order-code';
 import { assertFulfillment, fulfillmentData } from './fulfillment';
 import { INSTALLATION_MP_ID, INSTALLATION_NAME, INSTALLATION_PRODUCT_ID, INSTALLATION_RATE } from './installation';
+import { productTitle } from '../products/title';
 
 export interface CreateOrderRequest {
   items: { productId: number; qty: number }[];
@@ -135,7 +136,7 @@ export class OrdersService {
     const items = products.map((p) => {
       const price = Number(p.price);
       const unit = Math.round((p.currency === 'USD' ? price * usdArs : price) * 100) / 100;
-      return { productId: p.id, productName: `${p.brand} ${p.name}`.slice(0, 200), quantity: qtyById.get(p.id), unitPriceArs: unit };
+      return { productId: p.id, productName: productTitle(p).slice(0, 200), quantity: qtyById.get(p.id), unitPriceArs: unit };
     });
     if (items.some((i) => !(i.unitPriceArs > 0))) throw new BadRequestException('Hay un producto sin precio: consultanos por WhatsApp.');
     const unitById = new Map(items.map((i) => [i.productId, i.unitPriceArs]));

@@ -4,6 +4,8 @@
    El sitio tiene una copia (src/views/sizer.js del frontend) que muestra el resultado al instante y
    queda de respaldo si la API no responde: los cambios de cálculo van en los dos lados. */
 
+import { productTitle } from '../products/title';
+
 /* Producto tal como lo ve el sitio (adaptApiProduct): id "db-N", precio en USD, specs normalizados. */
 export interface SizerProduct {
   id: string;
@@ -157,7 +159,7 @@ const sizerLine = (qty: number, item: any, note = '') => ({ qty, item, note });
 const sizerTotal = (lines: any[]) => lines.reduce((s, l) => s + l.qty * l.item.usd, 0);
 const sizerPlural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const sizerLocation = (hsp: any) => SIZER_LOCATIONS.find((l) => l.value === String(hsp)) || SIZER_LOCATIONS[0];
-const sizerItemName = (it: any) => `${it.brand} ${it.name}`;
+const sizerItemName = (it: any) => productTitle(it);
 
 /* Todo lo que depende del catálogo va en una clase: cada pedido trae el suyo. */
 export class Sizer {
@@ -304,12 +306,12 @@ export class Sizer {
     const acKw = nInv * inv.kw;
 
     const extra: any[] = [];
-    if (plan.impossible) extra.push({ tone: 'bad', text: `Con ${fmtNum(env.tmin)} °C y ${fmtNum(env.tmax)} °C no hay una cantidad de paneles en serie que entre en la ventana de tensión del ${inv.brand} ${inv.name}.` });
+    if (plan.impossible) extra.push({ tone: 'bad', text: `Con ${fmtNum(env.tmin)} °C y ${fmtNum(env.tmax)} °C no hay una cantidad de paneles en serie que entre en la ventana de tensión del ${productTitle(inv)}.` });
     extra.push({ tone: n <= t.nArea ? 'ok' : 'bad', text: `Superficie: ${n} paneles ocupan ${fmtNum(n * pan.area, 1)} m² de ${fmtNum(sizerNum(cu.area))} m² libres.` });
     if (t.nReq > t.nArea) extra.push({ tone: 'warn', text: `El techo limita: para el objetivo harían falta ${t.nReq} paneles (${fmtNum(t.nReq * pan.area)} m²).` });
     if (n < t.nTarget && !plan.impossible) extra.push({ tone: 'warn', text: nInv > 1
       ? `Se usan ${n} de los ${t.nTarget} paneles posibles, para que los ${nInv} inversores queden iguales y sin sumar uno más.`
-      : `Se usan ${n} de los ${t.nTarget} paneles posibles: es lo que admite un ${inv.brand} ${inv.name} y evita sumar otro inversor.` });
+      : `Se usan ${n} de los ${t.nTarget} paneles posibles: es lo que admite un ${productTitle(inv)} y evita sumar otro inversor.` });
     if (backup) extra.push({ tone: acKw >= crit ? 'ok' : 'bad', text: `Potencia AC de ${fmtNum(acKw)} kW para ${fmtNum(crit, 1)} kW de cargas críticas.` });
     if (inv.type !== 'off' && cu.phase !== inv.phase) extra.push({ tone: 'bad', text: 'La fase del inversor no coincide con la conexión.' });
     if (cu.phase === 'mono' && acKw > 10) extra.push({ tone: 'warn', text: `${fmtNum(acKw)} kW de inversores en una conexión monofásica: lo habitual es no pasar de 10 kW. Consultá con tu distribuidora o pasá a trifásica.` });
