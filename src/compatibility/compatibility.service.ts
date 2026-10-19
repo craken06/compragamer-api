@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   DEFAULT_RULES, Evaluation, Params, ProductLike, Rule,
@@ -17,18 +17,40 @@ export interface EvaluateRequest {
 }
 
 const RULES_CACHE_MS = 60 * 1000;
+const PRODUCTS_CACHE_MS = 60 * 1000; // el configurador pide en cada paso: sin esto, cada pedido iba a la base (~0,5 s)
 const MAX_IDS = 100;
 
 @Injectable()
-export class CompatibilityService {
+export class CompatibilityService implements OnModuleInit {
   private readonly logger = new Logger(CompatibilityService.name);
   private cache: { rules: Rule[]; at: number } | null = null;
+  private productsCache: { byId: Map<number, ProductLike>; at: number } | null = null;
+  private rulesRefresh: Promise<Rule[]> | null = null;
+  private productsRefresh: Promise<Map<number, ProductLike>> | null = null;
 
   constructor(private prisma: PrismaService) {}
 
-  /** Reglas activas de la tabla; si la tabla no existe o está vacía, las reglas por defecto. */
+  /** Al arrancar se cargan reglas y catálogo, así el primer visitante no espera a la base. */
+  onModuleInit() {
+    void this.refreshRules();
+    this.refreshProducts().catch((err) => this.logger.warn(`No se pudo precargar el catálogo: ${(err as Error).message}`));
+  }
+
+  /** Reglas activas de la tabla; si la tabla no existe o está vacía, las reglas por defecto.
+      Si la copia en memoria venció se devuelve igual y se renueva en segundo plano: solo
+      se espera a la base la primera vez (o después de editar una regla). */
   async getRules(): Promise<Rule[]> {
     if (this.cache && Date.now() - this.cache.at < RULES_CACHE_MS) return this.cache.rules;
+    if (this.cache) { void this.refreshRules(); return this.cache.rules; }
+    return this.refreshRules();
+  }
+
+  private refreshRules(): Promise<Rule[]> {
+    if (!this.rulesRefresh) this.rulesRefresh = this.loadRules().finally(() => { this.rulesRefresh = null; });
+    return this.rulesRefresh;
+  }
+
+  private async loadRules(): Promise<Rule[]> {
     let rules: Rule[] = DEFAULT_RULES;
     try {
       const rows = await this.prisma.compatibilityRule.findMany({ where: { active: true }, orderBy: { priority: 'asc' } });
@@ -72,12 +94,40 @@ export class CompatibilityService {
       if (!c || typeof c !== 'object' || (c.op !== undefined && !ops.includes(c.op))) throw new BadRequestException(`condition.op tiene que ser uno de ${ops.join(' ')}.`);
       data.condition = c;
     }
-    this.cache = null;
-    if (id) return this.prisma.compatibilityRule.update({ where: { id }, data });
-    for (const k of ['sourceCategory', 'targetCategory', 'checkKey', 'condition', 'resultType']) {
-      if (data[k] === undefined) throw new BadRequestException(`Falta ${k}.`);
+    if (!id) {
+      for (const k of ['sourceCategory', 'targetCategory', 'checkKey', 'condition', 'resultType']) {
+        if (data[k] === undefined) throw new BadRequestException(`Falta ${k}.`);
+      }
     }
-    return this.prisma.compatibilityRule.create({ data });
+    const saved = id
+      ? await this.prisma.compatibilityRule.update({ where: { id }, data })
+      : await this.prisma.compatibilityRule.create({ data });
+    this.cache = null; // después de guardar: si no, una lectura en el medio volvía a cachear la regla vieja
+    return saved;
+  }
+
+  /** Productos activos por id (con la categoría como slug), en memoria por PRODUCTS_CACHE_MS;
+      vencida, se usa igual y se renueva en segundo plano (como las reglas). */
+  private async getProductsById(): Promise<Map<number, ProductLike>> {
+    const c = this.productsCache;
+    if (c && Date.now() - c.at < PRODUCTS_CACHE_MS) return c.byId;
+    if (c) {
+      this.refreshProducts().catch((err) => this.logger.warn(`No se pudo renovar el catálogo en memoria: ${(err as Error).message}`));
+      return c.byId;
+    }
+    return this.refreshProducts();
+  }
+
+  private refreshProducts(): Promise<Map<number, ProductLike>> {
+    if (!this.productsRefresh) this.productsRefresh = this.loadProducts().finally(() => { this.productsRefresh = null; });
+    return this.productsRefresh;
+  }
+
+  private async loadProducts(): Promise<Map<number, ProductLike>> {
+    const rows = await this.prisma.product.findMany({ where: { active: true }, include: { category: true } });
+    const byId = new Map<number, ProductLike>(rows.map((p) => [p.id, { id: p.id, name: p.name, category: p.category.slug, specs: (p.specs as any) || {} }]));
+    this.productsCache = { byId, at: Date.now() };
+    return byId;
   }
 
   async getPublicRules() {
@@ -97,13 +147,10 @@ export class CompatibilityService {
     const selected = Number(req.converterId) || null;
     const wiring = req.panel.wiring === 'parallel' ? 'parallel' : 'series';
 
-    const rules = await this.getRules();
+    const [rules, byId] = await Promise.all([this.getRules(), this.getProductsById()]);
     const tMin = Number(req.tMinC);
     const params: Params = paramsFromRules(rules, Number.isFinite(tMin) && tMin >= -50 && tMin <= 30 ? { tMinC: tMin } : {});
 
-    const allIds = [...new Set([Number(req.panel.productId), ...converterIds, ...batteryIds, ...extraIds, ...(selected ? [selected] : [])])];
-    const rows = await this.prisma.product.findMany({ where: { id: { in: allIds }, active: true }, include: { category: true } });
-    const byId = new Map<number, ProductLike>(rows.map((p) => [p.id, { id: p.id, name: p.name, category: p.category.slug, specs: (p.specs as any) || {} }]));
     const panel = byId.get(Number(req.panel.productId));
     if (!panel || panel.category !== 'panel') throw new BadRequestException('El producto elegido como panel no existe o no es un panel.');
 
