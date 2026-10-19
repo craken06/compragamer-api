@@ -8,6 +8,7 @@ import { ShippingAddress, normalizeAddress, normalizeBilling, normalizePhone } f
 import { MercadoPagoClient } from './mercadopago.client';
 import { withUniqueCode } from './order-code';
 import { assertFulfillment, fulfillmentData } from './fulfillment';
+import { INSTALLATION_MP_ID, INSTALLATION_NAME, INSTALLATION_PRODUCT_ID, INSTALLATION_RATE } from './installation';
 
 export interface CreateOrderRequest {
   items: { productId: number; qty: number }[];
@@ -17,6 +18,8 @@ export interface CreateOrderRequest {
   saveDetails?: boolean; // guarda teléfono, dirección y facturación en la cuenta
   notes?: string;
   mode?: 'pago' | 'cotizacion'; // cotizacion = se guarda el pedido sin cobrar
+  /** equipos (de `items`) a los que se les pidió instalación y asesoría: se cobra INSTALLATION_RATE de su precio */
+  installation?: { productId: number; qty: number }[];
 }
 
 export type AdminOrderFilter = 'para_preparar' | 'todos' | 'pendientes_pago' | 'entregados';
@@ -102,6 +105,20 @@ export class OrdersService {
       throw new BadRequestException(`Se pueden pedir hasta ${MAX_QTY} unidades de cada producto.`);
     }
 
+    // instalación: solo sobre equipos que están en el pedido, y no más unidades que las pedidas
+    const installQty = new Map<number, number>();
+    if (req?.installation !== undefined) {
+      if (!Array.isArray(req.installation) || req.installation.length > MAX_ITEMS) throw new BadRequestException('La instalación pedida no es válida.');
+      for (const l of req.installation) {
+        const id = Number(l?.productId), qty = Math.round(Number(l?.qty));
+        if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(qty) || qty < 1) throw new BadRequestException('La instalación pedida no es válida.');
+        installQty.set(id, (installQty.get(id) ?? 0) + qty);
+      }
+      if ([...installQty].some(([id, q]) => q > (qtyById.get(id) ?? 0))) {
+        throw new BadRequestException('La instalación incluye equipos que no están en el pedido. Actualizá la página.');
+      }
+    }
+
     // entrega y facturación (las validaciones lanzan 400 con el mensaje para el usuario)
     const phone = normalizePhone(req?.phone);
     const method = req?.delivery?.method;
@@ -121,6 +138,11 @@ export class OrdersService {
       return { productId: p.id, productName: `${p.brand} ${p.name}`.slice(0, 200), quantity: qtyById.get(p.id), unitPriceArs: unit };
     });
     if (items.some((i) => !(i.unitPriceArs > 0))) throw new BadRequestException('Hay un producto sin precio: consultanos por WhatsApp.');
+    const unitById = new Map(items.map((i) => [i.productId, i.unitPriceArs]));
+    const installBase = [...installQty].reduce((s, [id, q]) => s + (unitById.get(id) ?? 0) * q, 0);
+    if (installBase > 0) {
+      items.push({ productId: INSTALLATION_PRODUCT_ID, productName: INSTALLATION_NAME, quantity: 1, unitPriceArs: Math.round(installBase * INSTALLATION_RATE * 100) / 100 });
+    }
     const total = Math.round(items.reduce((s, i) => s + i.unitPriceArs * i.quantity, 0) * 100) / 100;
 
     const quote = req.mode === 'cotizacion' || !this.mp.enabled;
@@ -165,7 +187,10 @@ export class OrdersService {
     try {
       const pref = await this.mp.createPreference({
         externalReference: code,
-        items: items.map((i) => ({ id: String(i.productId), title: i.productName, quantity: i.quantity, unit_price: i.unitPriceArs })),
+        items: items.map((i) => ({
+          id: i.productId === INSTALLATION_PRODUCT_ID ? INSTALLATION_MP_ID : String(i.productId),
+          title: i.productName, quantity: i.quantity, unit_price: i.unitPriceArs,
+        })),
         payerEmail: email, payerName: name,
         backUrl: `${frontend}/pedido/${code}/`,
         notificationUrl: apiPublic ? `${apiPublic}/payments/webhook` : undefined,

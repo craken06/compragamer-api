@@ -396,3 +396,40 @@ test('POST /orders: límite de 20 pedidos por día por cliente aunque cambie la 
   // otro cliente no comparte el contador
   await ctrl.create({ customer: { id: 8, name: 'Beto', email: 'b@x.com' } }, { ...base, items: [{ productId: 1, qty: 1 }] }, '10.0.1.2');
 });
+
+test('pedido con instalación: 25 % de los equipos que cubre, con precios del servidor; va a MP como "instalacion"', async () => {
+  const db = fakePrisma(products), mp = fakeMp();
+  // instalación sobre 2 paneles y el inversor (USD); el tercer panel queda suelto, sin instalación
+  const r = await svcOf(db, mp).create(ana, {
+    ...base,
+    items: [{ productId: 1, qty: 3 }, { productId: 2, qty: 1 }],
+    installation: [{ productId: 1, qty: 2 }, { productId: 2, qty: 1 }],
+  });
+  const equipos = 3 * 100000 + 800 * 1000;
+  const instalacion = 0.25 * (2 * 100000 + 800 * 1000);
+  assert.equal(r.totalArs, equipos + instalacion);
+  const line = db.orders[0].items.find((i: any) => i.productId === 0);
+  assert.equal(Number(line.unitPriceArs), instalacion);
+  assert.equal(line.quantity, 1);
+  assert.match(line.productName, /Instalación y asesoría/);
+  assert.deepEqual(mp.calls[0].items.find((i: any) => i.id === 'instalacion'), { id: 'instalacion', title: line.productName, quantity: 1, unit_price: instalacion });
+});
+
+test('pedido con instalación: equipos fuera del pedido, más unidades que las pedidas o formato inválido -> 400', async () => {
+  const svc = svcOf(fakePrisma(products));
+  const items = [{ productId: 1, qty: 2 }];
+  await assert.rejects(svc.create(ana, { ...base, items, installation: [{ productId: 2, qty: 1 }] }), /no están en el pedido/);
+  await assert.rejects(svc.create(ana, { ...base, items, installation: [{ productId: 1, qty: 3 }] }), /no están en el pedido/);
+  await assert.rejects(svc.create(ana, { ...base, items, installation: [{ productId: 1, qty: 1 }, { productId: 1, qty: 2 }] }), /no están en el pedido/);
+  await assert.rejects(svc.create(ana, { ...base, items, installation: 'sí' as any }), /no es válida/);
+  await assert.rejects(svc.create(ana, { ...base, items, installation: [{ productId: 0, qty: 1 }] }), /no es válida/);
+});
+
+test('pedido sin instalación (o con lista vacía): no agrega la línea del servicio', async () => {
+  const db = fakePrisma(products);
+  const svc = svcOf(db);
+  await svc.create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+  await svc.create(ana, { ...base, items: [{ productId: 1, qty: 1 }], installation: [] });
+  assert.equal(db.orders.flatMap((o: any) => o.items).filter((i: any) => i.productId === 0).length, 0);
+  assert.equal(db.orders[1].totalArs.toString(), '100000');
+});
