@@ -7,6 +7,7 @@ import { createHmac } from 'crypto';
 import { OrdersService } from '../src/orders/orders.service';
 import { OrdersController } from '../src/orders/orders.controller';
 import { MercadoPagoClient } from '../src/orders/mercadopago.client';
+import { MailService } from '../src/mail/mail.service';
 import { ORDER_CODE_RE } from '../src/orders/order-code';
 import { CustomerGuard } from '../src/customers/customer.guard';
 import { issueToken } from '../src/auth/token';
@@ -39,6 +40,11 @@ function fakePrisma(products: any[], customers: any[] = []) {
         orders.push(o); return o;
       },
       update: async ({ where, data }: any) => Object.assign(orders.find((o) => o.id === where.id), data),
+      updateMany: async ({ where, data }: any) => {
+        const r = orders.filter((o) => matches(o, where));
+        r.forEach((o) => Object.assign(o, data));
+        return { count: r.length };
+      },
       findUnique: async ({ where }: any) => orders.find((o) => matches(o, where)) ?? null,
       findMany: async function (this: any, args: any) {
         (this as any).last = args;
@@ -74,7 +80,7 @@ function fakeCustomers() {
   const calls: any[] = [];
   return { calls, updateMe: async (id: number, body: any) => { calls.push({ id, body }); return {}; } };
 }
-const svcOf = (db: any, mp = fakeMp(), customers: any = fakeCustomers()) => new OrdersService(db, rates, mp, customers);
+const svcOf = (db: any, mp = fakeMp(), customers: any = fakeCustomers(), mail?: any) => new OrdersService(db, rates, mp, customers, mail);
 
 test('pedido: precios del servidor (USD × cotización), ignora precios del cliente, agrupa cantidades', async () => {
   const db = fakePrisma(products), mp = fakeMp();
@@ -438,3 +444,88 @@ test('pedido sin instalación (o con lista vacía): no agrega la línea del serv
   assert.equal(db.orders.flatMap((o: any) => o.items).filter((i: any) => i.productId === 0).length, 0);
   assert.equal(db.orders[1].totalArs.toString(), '100000');
 });
+
+// ---------- mails de pedidos (servicio de mail real con Resend simulado) ----------
+
+function recordingMail() {
+  const sent: any[] = [];
+  const client: any = { enabled: true, send: async (m: any) => { sent.push(m); } };
+  const mail = new MailService(client);
+  mail.retryDelayMs = 0;
+  return { mail, sent };
+}
+
+test('mails: cotización avisa al cliente y a AURYX; pendiente de pago no manda nada', async () => {
+  const prev = process.env.NOTIFY_EMAIL;
+  process.env.NOTIFY_EMAIL = 'contacto@auryx.test';
+  try {
+    const { mail, sent } = recordingMail();
+    const mp = fakeMp(); mp.enabled = false;
+    const { code } = await svcOf(fakePrisma(products), mp, fakeCustomers(), mail).create(ana, { ...base, items: [{ productId: 1, qty: 2 }] });
+    await mail.flush();
+    assert.deepEqual(sent.map((m) => m.to).sort(), ['ana@example.com', 'contacto@auryx.test']);
+    assert.ok(sent.every((m) => m.subject.includes(code)));
+    assert.ok(sent.find((m) => m.to === 'ana@example.com').text.includes('2 × Jinko Panel'));
+
+    const r2 = recordingMail();
+    await svcOf(fakePrisma(products), fakeMp(), fakeCustomers(), r2.mail).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+    await r2.mail.flush();
+    assert.equal(r2.sent.length, 0);
+  } finally {
+    if (prev === undefined) delete process.env.NOTIFY_EMAIL; else process.env.NOTIFY_EMAIL = prev;
+  }
+});
+
+test('mails: pago aprobado manda confirmación una sola vez aunque MP repita (también en paralelo); rechazado no manda', async () => {
+  const prev = process.env.NOTIFY_EMAIL;
+  process.env.NOTIFY_EMAIL = 'contacto@auryx.test';
+  try {
+    const db = fakePrisma(products);
+    const { code } = await svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+    const { mail, sent } = recordingMail();
+    const approved = { id: 6, status: 'approved', external_reference: code, transaction_amount: 100000, currency_id: 'ARS' };
+    const svc = svcOf(db, fakeMp(approved), fakeCustomers(), mail);
+    await Promise.all([svc.handlePaymentNotification('6'), svc.handlePaymentNotification('6')]);
+    await svc.handlePaymentNotification('6');
+    await mail.flush();
+    assert.equal(db.orders[0].status, 'pagado');
+    assert.equal(sent.filter((m) => m.to === 'ana@example.com').length, 1);
+    assert.equal(sent.filter((m) => m.to === 'contacto@auryx.test').length, 1);
+    assert.match(sent.find((m) => m.to === 'ana@example.com').subject, /confirmado/i);
+
+    const db2 = fakePrisma(products);
+    const { code: code2 } = await svcOf(db2).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+    const r2 = recordingMail();
+    await svcOf(db2, fakeMp({ id: 7, status: 'rejected', external_reference: code2 }), fakeCustomers(), r2.mail).handlePaymentNotification('7');
+    await r2.mail.flush();
+    assert.equal(db2.orders[0].status, 'rechazado');
+    assert.equal(r2.sent.length, 0);
+  } finally {
+    if (prev === undefined) delete process.env.NOTIFY_EMAIL; else process.env.NOTIFY_EMAIL = prev;
+  }
+});
+
+test('mails: si Resend falla, el webhook igual marca pagado y responde', async () => {
+  const db = fakePrisma(products);
+  const { code } = await svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+  const client: any = { enabled: true, send: async () => { throw new Error('Resend caído'); } };
+  const mail = new MailService(client); mail.retryDelayMs = 0;
+  const svc = svcOf(db, fakeMp({ id: 6, status: 'approved', external_reference: code, transaction_amount: 100000, currency_id: 'ARS' }), fakeCustomers(), mail);
+  assert.equal((await svc.handlePaymentNotification('6')).status, 'pagado');
+  await mail.flush();
+});
+
+test('mails: entrega avisa al cliente solo cuando el estado cambia y corresponde (enviado con seguimiento)', async () => {
+  const db = fakePrisma(products);
+  db.orders.push({ id: 1, code: 'AX-AAAAAA', customerId: 7, customerName: 'Ana Pérez', customerEmail: 'ana@example.com', status: 'pagado', deliveryMethod: 'envio', fulfillmentStatus: 'pendiente', trackingNumber: null, totalArs: '100000', items: [] });
+  const { mail, sent } = recordingMail();
+  const svc = svcOf(db, fakeMp(), fakeCustomers(), mail);
+  await svc.setFulfillment(1, 'preparando');
+  await svc.setFulfillment(1, 'enviado', 'OCA-123');
+  await svc.setFulfillment(1, 'enviado', 'OCA-123');
+  await mail.flush();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'ana@example.com');
+  assert.ok(sent[0].text.includes('OCA-123'));
+});
+

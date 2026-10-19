@@ -33,9 +33,17 @@ services:
         sync: false
       # Adónde vuelve el cliente después de pagar, y URL pública de esta API (para el webhook)
       - key: FRONTEND_URL
-        value: https://craken06.github.io/auryx-frontend
+        value: https://auryx.com.ar
       - key: API_PUBLIC_URL
         sync: false
+      # Mails (Resend). Sin RESEND_API_KEY no se envía ninguno.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        value: AURYX <avisos@auryx.com.ar>
+      # Avisos internos: contacto@ reenvía a Gmail con Cloudflare Email Routing
+      - key: NOTIFY_EMAIL
+        value: contacto@auryx.com.ar
       # Cotización del dólar: tipo de dólar a usar (oficial, bolsa, blue, contadoconliqui, mayorista, tarjeta)
       - key: USD_ARS_CASA
         value: oficial

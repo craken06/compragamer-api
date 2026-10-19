@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { FulfillmentStatus, OrderStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -10,6 +10,7 @@ import { withUniqueCode } from './order-code';
 import { assertFulfillment, fulfillmentData } from './fulfillment';
 import { INSTALLATION_MP_ID, INSTALLATION_NAME, INSTALLATION_PRODUCT_ID, INSTALLATION_RATE } from './installation';
 import { productTitle } from '../products/title';
+import { MailService } from '../mail/mail.service';
 
 export interface CreateOrderRequest {
   items: { productId: number; qty: number }[];
@@ -80,6 +81,7 @@ export class OrdersService {
     private rates: ExchangeRateService,
     private mp: MercadoPagoClient,
     private customers: CustomersService,
+    @Optional() private mail?: MailService,
   ) {}
 
   /**
@@ -180,6 +182,7 @@ export class OrdersService {
 
     if (quote) {
       await saveDetails();
+      this.mail?.orderReceived({ ...order, items }, 'cotizacion');
       return { code, status: order.status, totalArs: total, paymentUrl: null };
     }
 
@@ -251,11 +254,15 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException(NOT_FOUND);
     assertFulfillment(order, status);
-    return this.prisma.order.update({
+    const previous = order.fulfillmentStatus;
+    const updated = await this.prisma.order.update({
       where: { id: order.id },
       data: fulfillmentData(status, trackingNumber),
       include: { items: true, customer: { select: { id: true, name: true } } },
     });
+    // volver a elegir el mismo estado (o corregir el seguimiento) no repite el mail
+    if (previous !== status) this.mail?.fulfillmentChanged(updated);
+    return updated;
   }
 
   /**
@@ -283,10 +290,25 @@ export class OrdersService {
     // un pedido ya pagado no vuelve atrás por una notificación vieja
     if (order.status === 'pagado' && status !== 'cancelado') status = 'pagado';
 
-    await this.prisma.order.update({
-      where: { id: order.id },
-      data: { status, mpPaymentId: String(payment.id), mpStatus: payment.status },
-    });
+    const data = { status, mpPaymentId: String(payment.id), mpStatus: payment.status };
+    if (status === 'pagado' && order.status !== 'pagado') {
+      // condicional: si MP manda dos notificaciones a la vez, solo una pasa el pedido a pagado y manda los mails
+      const { count } = await this.prisma.order.updateMany({ where: { id: order.id, status: { not: 'pagado' } }, data });
+      if (count === 1) await this.notifyPaid(order.id);
+    } else {
+      await this.prisma.order.update({ where: { id: order.id }, data });
+    }
     return { code: order.code, status };
+  }
+
+  /** Mails de pago confirmado. Un error acá no puede hacer fallar el webhook (MP reintentaría y el pedido ya está pagado). */
+  private async notifyPaid(orderId: number) {
+    if (!this.mail) return;
+    try {
+      const paid = await this.prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+      if (paid) this.mail.orderReceived(paid, 'pagado');
+    } catch (err) {
+      this.logger.warn(`No se pudo armar el mail del pedido pagado ${orderId}: ${(err as Error)?.message}`);
+    }
   }
 }

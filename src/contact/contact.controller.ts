@@ -1,7 +1,9 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Ip, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Ip, Optional, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
 import { AdminKeyGuard } from '../common/admin-key.guard';
 import { RateLimiter } from '../common/rate-limit';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
+import { REVOCATION_PREFIX, revocationCode } from '../mail/templates';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -9,9 +11,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export class ContactController {
   private limiter = new RateLimiter(5, 60 * 60 * 1000, 'Ya recibimos varios mensajes tuyos. Si es urgente, escribinos por WhatsApp.');
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, @Optional() private mail?: MailService) {}
 
-  // POST /contact { name, email, phone?, message } -> guarda el mensaje para el panel de administración
+  // POST /contact { name, email, phone?, message } -> guarda el mensaje para el panel de administración y avisa por mail.
+  // Un arrepentimiento (prefijo REVOCATION_PREFIX) devuelve además el código de la solicitud: { ok, code }.
   @Post('contact')
   @HttpCode(201)
   async create(@Body() body: { name?: string; email?: string; phone?: string; message?: string; website?: string }, @Ip() ip: string) {
@@ -24,8 +27,10 @@ export class ContactController {
     if (!EMAIL_RE.test(email)) throw new BadRequestException('El email no es válido.');
     if (message.length < 5) throw new BadRequestException('El mensaje está vacío.');
     this.limiter.check(ip);
-    await this.prisma.contactMessage.create({ data: { name, email, phone, message } });
-    return { ok: true };
+    const saved = await this.prisma.contactMessage.create({ data: { name, email, phone, message } });
+    const code = message.startsWith(REVOCATION_PREFIX) ? revocationCode(saved.id) : undefined;
+    this.mail?.contactReceived({ id: saved.id, name, email, phone, message }, code);
+    return code ? { ok: true, code } : { ok: true };
   }
 
   @Get('admin/contact')

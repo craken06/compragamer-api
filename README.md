@@ -160,6 +160,22 @@ npm test                                         # tests del motor, calculadoras
    Sin ella se aceptan sin firma (el pago igual se consulta a MP) y al arrancar se avisa en el log. El webhook tiene un límite de 120 requests por minuto por IP.
 4. Probar con las tarjetas de prueba de MP antes de pasar a las credenciales productivas.
 
+## Mails
+
+`src/mail/`: Resend con fetch (sin SDK). Se envían en segundo plano después de guardar, con un reintento;
+si fallan quedan en el log y nunca rompen el formulario, el pedido ni el webhook.
+
+| Evento | Al cliente | A `NOTIFY_EMAIL` |
+|---|---|---|
+| `POST /contact` | acuse (sin repetir el mensaje) | aviso; "Responder" va al cliente |
+| `POST /contact` con `[BOTÓN DE ARREPENTIMIENTO]` | acuse con el código `ARR-000042` (Res. 424/2020); la respuesta trae `code` | aviso con el código |
+| Pedido guardado como cotización | "Recibimos tu pedido" | aviso |
+| Webhook: pasa a pagado (una sola vez, con `updateMany` condicional) | pago confirmado | "para preparar" |
+| Entrega: enviado / listo para retirar / entregado (si cambió) | aviso | — |
+
+Variables: `RESEND_API_KEY` (sin ella no se envía nada), `MAIL_FROM` (dominio verificado en Resend),
+`NOTIFY_EMAIL` (contacto@auryx.com.ar, que Cloudflare Email Routing reenvía a Gmail) y `FRONTEND_URL` (links).
+
 ---
 
 ## Problemas comunes
