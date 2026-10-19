@@ -18,10 +18,10 @@ import { UpdateProductDto } from './dto/update-product.dto';
 
 // Campos que el admin puede escribir. El body nunca se esparce entero en Prisma: así no se cuelan
 // id, createdAt ni escrituras anidadas (images: { create: ... }) que saltean las validaciones.
-const WRITABLE = ['brand', 'name', 'sku', 'price', 'currency', 'stockStatus', 'description', 'specs', 'datasheetUrl', 'active'] as const;
+const WRITABLE = ['brand', 'name', 'sku', 'price', 'currency', 'stockStatus', 'description', 'specs', 'datasheetUrl', 'active', 'showInStore'] as const;
 const SCALAR_TYPES: Record<string, string[]> = {
   brand: ['string'], name: ['string'], sku: ['string'], price: ['number', 'string'], currency: ['string'],
-  stockStatus: ['string'], description: ['string'], datasheetUrl: ['string'], active: ['boolean'],
+  stockStatus: ['string'], description: ['string'], datasheetUrl: ['string'], active: ['boolean'], showInStore: ['boolean'],
 };
 
 /** Arma el data de Prisma solo con los campos permitidos y con el tipo esperado (null borra los opcionales). */
@@ -54,7 +54,8 @@ function categoryIdOf(v: unknown): number {
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
-  // Lectura pública: solo devuelve productos activos.
+  // Lectura pública: solo devuelve productos activos, incluidos los ocultos en la tienda (showInStore = false):
+  // el sitio los usa en el dimensionador y los saca de la tienda, la ficha y el paso a paso.
   // GET /products             -> todos
   // GET /products?categoryId=2 -> filtrados por categoría
   @Get()

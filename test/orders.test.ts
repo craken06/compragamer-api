@@ -31,7 +31,7 @@ function fakePrisma(products: any[], customers: any[] = []) {
   return {
     orders, customers,
     lastFindMany: null as any,
-    product: { findMany: async ({ where }: any) => products.filter((p) => where.id.in.includes(p.id) && p.active) },
+    product: { findMany: async ({ where: { id, ...rest } }: any) => products.filter((p) => id.in.includes(p.id) && Object.entries(rest).every(([k, v]) => p[k] === v)) },
     customer: { findUnique: async ({ where }: any) => customers.find((c) => c.id === where.id) ?? null },
     order: {
       create: async ({ data }: any) => {
@@ -51,9 +51,11 @@ function fakePrisma(products: any[], customers: any[] = []) {
 }
 const rates: any = { getRate: async () => ({ usdArs: 1000 }) };
 const products = [
-  { id: 1, brand: 'Jinko', name: 'Panel', price: '100000', currency: 'ARS', stockStatus: 'disponible', active: true },
-  { id: 2, brand: 'Huawei', name: 'Inversor', price: '800', currency: 'USD', stockStatus: 'disponible', active: true },
-  { id: 3, brand: 'X', name: 'Agotado', price: '10', currency: 'ARS', stockStatus: 'sin_stock', active: true },
+  { id: 1, brand: 'Jinko', name: 'Panel', price: '100000', currency: 'ARS', stockStatus: 'disponible', active: true, showInStore: true },
+  { id: 2, brand: 'Huawei', name: 'Inversor', price: '800', currency: 'USD', stockStatus: 'disponible', active: true, showInStore: true },
+  { id: 3, brand: 'X', name: 'Agotado', price: '10', currency: 'ARS', stockStatus: 'sin_stock', active: true, showInStore: true },
+  { id: 4, brand: 'Y', name: 'Oculto en la tienda', price: '10', currency: 'ARS', stockStatus: 'disponible', active: true, showInStore: false },
+  { id: 5, brand: 'Z', name: 'Desactivado', price: '10', currency: 'ARS', stockStatus: 'disponible', active: false, showInStore: true },
 ];
 const ana = { id: 7, name: 'Ana Pérez', email: 'ana@example.com' };
 const address = { street: 'Av. Siempreviva 742', floor: '3B', city: 'Rosario', province: 'Santa Fe', zip: '2000' };
@@ -175,6 +177,9 @@ test('pedido: validaciones de ítems', async () => {
   await assert.rejects(svc.create(ana, { ...base, items: [] }));
   await assert.rejects(svc.create(ana, { ...base, items: [{ productId: 1, qty: 0 }] }));
   await assert.rejects(svc.create(ana, { ...base, items: [{ productId: 99, qty: 1 }] }), /ya no está disponible/);
+  // oculto en la tienda (solo lo usa el dimensionador) o desactivado: no se puede comprar
+  await assert.rejects(svc.create(ana, { ...base, items: [{ productId: 4, qty: 1 }] }), /ya no está disponible/);
+  await assert.rejects(svc.create(ana, { ...base, items: [{ productId: 5, qty: 1 }] }), /ya no está disponible/);
   await assert.rejects(svc.create(ana, { ...base, items: [{ productId: 3, qty: 1 }] }), /Sin stock/);
 });
 

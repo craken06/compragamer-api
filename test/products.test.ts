@@ -24,8 +24,8 @@ test('crear producto: solo pasan los campos permitidos (sin id, createdAt ni esc
 test('editar producto: whitelist, active y categoryId opcional; null borra un opcional', async () => {
   const svc = fakeService();
   const ctrl = new ProductsController(svc as any);
-  await ctrl.update(5, { active: false, sku: null, images: { deleteMany: {} }, updatedAt: 'x' } as any);
-  assert.deepEqual(svc.calls[0], { id: 5, data: { active: false, sku: null } });
+  await ctrl.update(5, { active: false, showInStore: false, sku: null, images: { deleteMany: {} }, updatedAt: 'x' } as any);
+  assert.deepEqual(svc.calls[0], { id: 5, data: { active: false, showInStore: false, sku: null } });
   await ctrl.update(5, { categoryId: 3, price: '100.50' } as any);
   assert.deepEqual(svc.calls[1].data, { price: '100.50', category: { connect: { id: 3 } } });
 });
@@ -36,6 +36,7 @@ test('producto: tipos inválidos, datasheetUrl no http(s) y categoryId inválido
   assert.throws(() => productData({ specs: [1, 2] }), BadRequestException);
   assert.throws(() => productData({ specs: 'texto' }), BadRequestException);
   assert.throws(() => productData({ active: 'false' }), BadRequestException);
+  assert.throws(() => productData({ showInStore: 'false' }), BadRequestException);
   assert.throws(() => productData({ datasheetUrl: 'javascript:alert(1)' }), BadRequestException);
   assert.equal(productData({ datasheetUrl: 'http://viejo.com/d.pdf' }).datasheetUrl, 'http://viejo.com/d.pdf');
   assert.throws(() => ctrl.create({ ...body, categoryId: 'abc' } as any), BadRequestException);

@@ -11,5 +11,6 @@ export class UpdateProductDto implements Partial<CreateProductDto> {
   description?: string;
   specs?: Record<string, any>;
   datasheetUrl?: string;
-  active?: boolean; // false = se oculta de la tienda sin borrarlo
+  active?: boolean; // false = desactivado: no se usa en ningún lado, sin borrarlo
+  showInStore?: boolean; // false = fuera de la tienda; el dimensionador lo sigue usando
 }

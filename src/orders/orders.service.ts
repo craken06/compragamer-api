@@ -127,7 +127,7 @@ export class OrdersService {
     const address = method === 'envio' ? normalizeAddress(req.delivery.address) : null;
     const billing = normalizeBilling(req?.billing);
 
-    const products = await this.prisma.product.findMany({ where: { id: { in: [...qtyById.keys()] }, active: true } });
+    const products = await this.prisma.product.findMany({ where: { id: { in: [...qtyById.keys()] }, active: true, showInStore: true } });
     if (products.length !== qtyById.size) throw new BadRequestException('Algún producto del carrito ya no está disponible. Actualizá la página.');
     const sinStock = products.filter((p) => p.stockStatus === 'sin_stock');
     if (sinStock.length) throw new BadRequestException(`Sin stock: ${sinStock.map((p) => p.name).join(', ')}.`);

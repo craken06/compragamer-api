@@ -88,6 +88,9 @@ async function main() {
     : Number((await prisma.$queryRaw`SELECT COUNT(*)::int AS n FROM orders WHERE status::text = 'pagado'`)[0].n);
   console.log(`Pedidos pagados que se marcan como entregados (solo la primera vez): ${paidToDeliver}`);
 
+  const hasShowInStore = (await prisma.$queryRaw`SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'show_in_store'`).length > 0;
+  console.log(`products.show_in_store (oculto en la tienda): ${hasShowInStore ? 'ya existe' : 'se agrega, con todos los productos visibles'}`);
+
   if (!APPLY) { await prisma.$disconnect(); return; }
 
   await prisma.$transaction(async (tx) => {

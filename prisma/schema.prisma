@@ -40,7 +40,8 @@ model Product {
   description  String?
   specs        Json           @default("{}")
   datasheetUrl String?        @map("datasheet_url")
-  active       Boolean        @default(true)
+  active       Boolean        @default(true) // false = no se usa en ningún lado (tienda, dimensionador ni pedidos)
+  showInStore  Boolean        @default(true) @map("show_in_store") // false = fuera de la tienda; el dimensionador lo sigue usando
   createdAt    DateTime       @default(now()) @map("created_at")
   updatedAt    DateTime       @updatedAt @map("updated_at")
   images       ProductImage[]
