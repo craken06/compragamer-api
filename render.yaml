@@ -26,7 +26,7 @@ services:
       # Ingreso de clientes con Google: ID de cliente OAuth (el mismo que usa el sitio)
       - key: GOOGLE_CLIENT_ID
         sync: false
-      # Mercado Pago (Checkout Pro). Sin MP_ACCESS_TOKEN los pedidos se guardan como cotización.
+      # Mercado Pago (Checkout Pro). Sin MP_ACCESS_TOKEN (ni transferencia) no se pueden hacer pedidos.
       - key: MP_ACCESS_TOKEN
         sync: false
       - key: MP_WEBHOOK_SECRET
@@ -44,6 +44,36 @@ services:
       # Avisos internos: contacto@ reenvía a Gmail con Cloudflare Email Routing
       - key: NOTIFY_EMAIL
         value: contacto@auryx.com.ar
+      # Transferencia bancaria (deshabilitada mientras TRANSFER_ENABLED no sea "true").
+      # TRANSFER_BANK = {"holder":"…","cuit":"…","bank":"…","cbu":"…","alias":"…"}
+      - key: TRANSFER_ENABLED
+        sync: false
+      - key: TRANSFER_BANK
+        sync: false
+      - key: TRANSFER_DISCOUNT_PCT
+        sync: false
+      - key: TRANSFER_DEADLINE_HOURS
+        sync: false
+      # Archivos (Cloudflare R2): comprobantes, recursos de cursos, entregas y portadas
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_PRIVATE_BUCKET
+        sync: false
+      - key: R2_PUBLIC_BUCKET
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+      # Videos de los cursos (Bunny Stream, con Token Authentication)
+      - key: BUNNY_LIBRARY_ID
+        sync: false
+      - key: BUNNY_API_KEY
+        sync: false
+      - key: BUNNY_TOKEN_KEY
+        sync: false
       # Cotización del dólar: tipo de dólar a usar (oficial, bolsa, blue, contadoconliqui, mayorista, tarjeta)
       - key: USD_ARS_CASA
         value: oficial

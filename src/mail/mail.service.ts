@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { MailClient, OutgoingMail } from './mail.client';
 import {
-  ContactMail, OrderMail, OrderMailKind, contactAck, contactNotice, fulfillmentCustomer, orderCustomer, orderNotice,
+  BankMail, ContactMail, OrderMail, OrderMailKind, contactAck, contactNotice, fulfillmentCustomer, orderCustomer, orderNotice,
+  receiptRejectedCustomer, transferCustomer, transferNotice,
 } from './templates';
 
 /*
@@ -71,6 +72,24 @@ export class MailService {
       { to: o.customerEmail, ...orderCustomer(o, kind, this.site), ...(this.notifyTo ? { replyTo: this.notifyTo } : {}) },
       ...this.notice(orderNotice(o, kind, this.site), o.customerEmail),
     ]);
+  }
+
+  /** Pedido por transferencia creado: datos bancarios al cliente y aviso. */
+  transferOrderCreated(o: OrderMail, bank: BankMail, deadline: Date | null): void {
+    this.dispatch([
+      { to: o.customerEmail, ...transferCustomer(o, bank, deadline, this.site), ...(this.notifyTo ? { replyTo: this.notifyTo } : {}) },
+      ...this.notice(transferNotice(o, 'nuevo', this.site), o.customerEmail),
+    ]);
+  }
+
+  /** El cliente subió el comprobante: solo aviso interno. */
+  receiptUploaded(o: OrderMail): void {
+    this.dispatch(this.notice(transferNotice(o, 'comprobante', this.site), o.customerEmail));
+  }
+
+  /** El admin rechazó el comprobante. */
+  receiptRejected(o: OrderMail, deadline: Date | null): void {
+    this.dispatch([{ to: o.customerEmail, ...receiptRejectedCustomer(o, deadline, this.site), ...(this.notifyTo ? { replyTo: this.notifyTo } : {}) }]);
   }
 
   /** Cambio de estado de entrega (solo los que avisan al cliente). */

@@ -10,6 +10,7 @@ import { MercadoPagoClient } from '../src/orders/mercadopago.client';
 import { MailService } from '../src/mail/mail.service';
 import { ORDER_CODE_RE } from '../src/orders/order-code';
 import { CustomerGuard } from '../src/customers/customer.guard';
+import { StorageService } from '../src/storage/storage.service';
 import { issueToken } from '../src/auth/token';
 
 // Evalúa el subconjunto de `where` que usa el servicio: igualdad, { not }, { contains, mode }.
@@ -22,7 +23,9 @@ function matches(o: any, where: any = {}): boolean {
         return cond.mode === 'insensitive' ? v.toLowerCase().includes(c.toLowerCase()) : v.includes(c);
       }
       if ('in' in cond) return cond.in.includes(o[k]);
+      if ('lt' in cond) return o[k] != null && o[k] < cond.lt;
     }
+    if (cond === null) return o[k] == null;
     return o[k] === cond;
   });
 }
@@ -80,7 +83,23 @@ function fakeCustomers() {
   const calls: any[] = [];
   return { calls, updateMe: async (id: number, body: any) => { calls.push({ id, body }); return {}; } };
 }
-const svcOf = (db: any, mp = fakeMp(), customers: any = fakeCustomers(), mail?: any) => new OrdersService(db, rates, mp, customers, mail);
+const svcOf = (db: any, mp = fakeMp(), customers: any = fakeCustomers(), mail?: any, storage?: any) => new OrdersService(db, rates, mp, customers, mail, storage);
+
+const TRANSFER_ENV = {
+  TRANSFER_ENABLED: 'true',
+  TRANSFER_BANK: JSON.stringify({ holder: 'AURYX SRL', cuit: '30-12345678-9', bank: 'Banco Test', cbu: '0000003100000000000001', alias: 'auryx.solar' }),
+  TRANSFER_DISCOUNT_PCT: undefined as string | undefined,
+  TRANSFER_DEADLINE_HOURS: undefined as string | undefined,
+};
+
+/** Corre fn con esas variables de entorno y después las deja como estaban (undefined = borrar). */
+async function withEnv<T>(vars: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
+  const prev: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(vars)) { prev[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  try { return await fn(); } finally {
+    for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
 
 test('pedido: precios del servidor (USD × cotización), ignora precios del cliente, agrupa cantidades', async () => {
   const db = fakePrisma(products), mp = fakeMp();
@@ -172,10 +191,11 @@ test('pedido: si guardar los datos en la cuenta falla, igual devuelve paymentUrl
   assert.equal(r.paymentUrl, 'https://mp.test/checkout');
   assert.equal(db.orders[0].paymentUrl, 'https://mp.test/checkout');
   assert.equal(db.orders[0].status, 'pendiente_pago');
-  // en cotización también
-  const mp = fakeMp(); mp.enabled = false;
-  const r2 = await svcOf(fakePrisma(products), mp, customers).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], saveDetails: true });
-  assert.equal(r2.status, 'cotizacion');
+  // por transferencia también
+  await withEnv(TRANSFER_ENV, async () => {
+    const r2 = await svcOf(fakePrisma(products), fakeMp(), customers).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], saveDetails: true, paymentMethod: 'transferencia' });
+    assert.equal(r2.status, 'pendiente_pago');
+  });
 });
 
 test('pedido: validaciones de ítems', async () => {
@@ -189,16 +209,20 @@ test('pedido: validaciones de ítems', async () => {
   await assert.rejects(svc.create(ana, { ...base, items: [{ productId: 3, qty: 1 }] }), /Sin stock/);
 });
 
-test('sin MP configurado o modo cotización: se guarda como cotización, sin link de pago', async () => {
+test('sin medios de pago -> 503; modo cotización -> 400 (todo se paga online)', async () => {
   const db = fakePrisma(products), mp = fakeMp(); mp.enabled = false;
-  const r = await svcOf(db, mp).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
-  assert.equal(r.paymentUrl, null);
-  assert.equal(db.orders[0].status, 'cotizacion');
+  await assert.rejects(svcOf(db, mp).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] }), /no está disponible/);
   const mp2 = fakeMp();
-  const r2 = await svcOf(db, mp2).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], mode: 'cotizacion' });
-  assert.equal(r2.paymentUrl, null);
-  assert.equal(r2.status, 'cotizacion');
+  await assert.rejects(svcOf(db, mp2).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], mode: 'cotizacion' } as any), /se pagan online/);
+  assert.equal(db.orders.length, 0);
   assert.equal(mp2.calls.length, 0);
+});
+
+test('si Mercado Pago falla al crear el link, el pedido queda cancelado (no como cotización)', async () => {
+  const db = fakePrisma(products), mp = fakeMp();
+  mp.createPreference = async () => { throw new Error('MP caído'); };
+  await assert.rejects(svcOf(db, mp).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] }), /MP caído/);
+  assert.equal(db.orders[0].status, 'cancelado');
 });
 
 test('webhook: aprobado por el total -> pagado; monto menor -> queda pendiente; pagado no retrocede', async () => {
@@ -455,17 +479,19 @@ function recordingMail() {
   return { mail, sent };
 }
 
-test('mails: cotización avisa al cliente y a AURYX; pendiente de pago no manda nada', async () => {
+test('mails: transferencia avisa al cliente (con datos bancarios) y a AURYX; pendiente de MP no manda nada', async () => {
   const prev = process.env.NOTIFY_EMAIL;
   process.env.NOTIFY_EMAIL = 'contacto@auryx.test';
   try {
     const { mail, sent } = recordingMail();
-    const mp = fakeMp(); mp.enabled = false;
-    const { code } = await svcOf(fakePrisma(products), mp, fakeCustomers(), mail).create(ana, { ...base, items: [{ productId: 1, qty: 2 }] });
+    const { code } = await withEnv(TRANSFER_ENV, () =>
+      svcOf(fakePrisma(products), fakeMp(), fakeCustomers(), mail).create(ana, { ...base, items: [{ productId: 1, qty: 2 }], paymentMethod: 'transferencia' }));
     await mail.flush();
     assert.deepEqual(sent.map((m) => m.to).sort(), ['ana@example.com', 'contacto@auryx.test']);
     assert.ok(sent.every((m) => m.subject.includes(code)));
-    assert.ok(sent.find((m) => m.to === 'ana@example.com').text.includes('2 × Jinko Panel'));
+    const toAna = sent.find((m) => m.to === 'ana@example.com');
+    assert.ok(toAna.text.includes('2 × Jinko Panel'));
+    assert.ok(toAna.text.includes('auryx.solar') && toAna.text.includes('0000003100000000000001'));
 
     const r2 = recordingMail();
     await svcOf(fakePrisma(products), fakeMp(), fakeCustomers(), r2.mail).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
@@ -527,5 +553,152 @@ test('mails: entrega avisa al cliente solo cuando el estado cambia y corresponde
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, 'ana@example.com');
   assert.ok(sent[0].text.includes('OCA-123'));
+});
+
+// ---------- transferencias ----------
+
+const R2_ENV = { R2_ACCOUNT_ID: 'acc', R2_ACCESS_KEY_ID: 'AK', R2_SECRET_ACCESS_KEY: 'SK', R2_PRIVATE_BUCKET: 'priv' };
+const transferOrder = (db: any) =>
+  svcOf(db, fakeMp(), fakeCustomers(), undefined, new StorageService()).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], paymentMethod: 'transferencia' });
+
+test('transferencia: deshabilitada -> 400; habilitada -> pendiente, sin MP, con plazo y datos bancarios', async () => {
+  const db = fakePrisma(products), mp = fakeMp();
+  await withEnv({ TRANSFER_ENABLED: undefined }, () =>
+    assert.rejects(svcOf(db, mp).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], paymentMethod: 'transferencia' }), /transferencia bancaria no está disponible/));
+  await assert.rejects(svcOf(db, mp).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], paymentMethod: 'bitcoin' as any }), /Medio de pago inválido/);
+  const r: any = await withEnv(TRANSFER_ENV, () => svcOf(db, mp).create(ana, { ...base, items: [{ productId: 1, qty: 1 }], paymentMethod: 'transferencia' }));
+  const o = db.orders[0];
+  assert.equal(mp.calls.length, 0);
+  assert.equal(r.paymentUrl, null);
+  assert.equal(o.status, 'pendiente_pago');
+  assert.equal(o.paymentMethod, 'transferencia');
+  const hours = (o.transferDeadline.getTime() - Date.now()) / 3600e3;
+  assert.ok(hours > 71.9 && hours <= 72, `plazo ${hours} h`);
+  assert.equal(r.transfer.bank.alias, 'auryx.solar');
+  assert.equal(r.totalArs, 100000);
+  // con MP deshabilitado pero transferencia habilitada, MP -> 400 (no 503)
+  const off = fakeMp(); off.enabled = false;
+  await withEnv(TRANSFER_ENV, () => assert.rejects(svcOf(db, off).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] }), /elegí otro medio/));
+});
+
+test('transferencia: descuento como línea negativa; el total y el plazo respetan la configuración', async () => {
+  const db = fakePrisma(products);
+  const r: any = await withEnv({ ...TRANSFER_ENV, TRANSFER_DISCOUNT_PCT: '10', TRANSFER_DEADLINE_HOURS: '24' }, () =>
+    svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }, { productId: 2, qty: 1 }], paymentMethod: 'transferencia' }));
+  const disc = db.orders[0].items.find((i: any) => i.productId === -1);
+  assert.equal(Number(disc.unitPriceArs), -90000); // 10 % de 100.000 + 800.000
+  assert.equal(r.totalArs, 810000);
+  const hours = (db.orders[0].transferDeadline.getTime() - Date.now()) / 3600e3;
+  assert.ok(hours > 23.9 && hours <= 24);
+});
+
+test('transferencia: vencida sin comprobante se cancela al leerla y en el barrido; con comprobante no', async () => {
+  const db = fakePrisma(products);
+  await withEnv(TRANSFER_ENV, async () => {
+    const a = await transferOrder(db);
+    const b = await transferOrder(db);
+    const past = new Date(Date.now() - 1000);
+    db.orders[0].transferDeadline = past;
+    Object.assign(db.orders[1], { transferDeadline: past, receiptKey: `receipts/${b.code}/x.pdf` });
+    const seen = await svcOf(db).findForCustomer(7, a.code);
+    assert.equal(seen.status, 'cancelado');
+    assert.equal(seen.transfer, null);
+    assert.equal(db.orders[1].status, 'pendiente_pago');
+    assert.equal(await svcOf(db).expireTransfers(), 0);
+    const seenB: any = await svcOf(db).findForCustomer(7, b.code);
+    assert.equal(seenB.transfer.receiptUploaded, true);
+    assert.equal(seenB.transfer.bank.cbu, '0000003100000000000001');
+  });
+});
+
+test('comprobante: URL firmada solo para el dueño, transferencia pendiente, tipo y tamaño válidos', async () => {
+  const db = fakePrisma(products);
+  await withEnv({ ...TRANSFER_ENV, ...R2_ENV }, async () => {
+    const { code } = await transferOrder(db);
+    const { code: mpCode } = await svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+    const svc = svcOf(db, fakeMp(), fakeCustomers(), undefined, new StorageService());
+    const ok = { filename: 'comprobante.PDF', size: 120000, contentType: 'application/pdf' };
+    await assert.rejects(svc.receiptUploadUrl(99, code, ok), /no encontrado/);
+    await assert.rejects(svc.receiptUploadUrl(7, mpCode, ok), /no espera una transferencia/);
+    await assert.rejects(svc.receiptUploadUrl(7, code, { ...ok, filename: 'virus.exe' }), /no permitido/);
+    await assert.rejects(svc.receiptUploadUrl(7, code, { ...ok, size: 9 * 1024 * 1024 }), /8 MB/);
+    await assert.rejects(svc.receiptUploadUrl(7, code, { ...ok, contentType: 'image/png' }), /no coincide/);
+    const up = await svc.receiptUploadUrl(7, code, ok);
+    assert.match(up.key, new RegExp(`^receipts/${code}/[0-9a-f-]{36}\\.pdf$`));
+    assert.ok(up.url.startsWith('https://acc.r2.cloudflarestorage.com/priv/receipts/'));
+    assert.match(up.url, /X-Amz-SignedHeaders=content-length%3Bcontent-type%3Bhost/);
+    // sin R2 configurado: 503
+    await withEnv({ R2_ACCOUNT_ID: undefined }, () => assert.rejects(svc.receiptUploadUrl(7, code, ok), /Todavía no se pueden subir/));
+  });
+});
+
+test('comprobante: la clave tiene que ser de ese pedido; al registrarlo avisa a AURYX', async () => {
+  const db = fakePrisma(products);
+  await withEnv({ ...TRANSFER_ENV, ...R2_ENV, NOTIFY_EMAIL: 'contacto@auryx.test' }, async () => {
+    const { code } = await transferOrder(db);
+    const { code: other } = await transferOrder(db);
+    const { mail, sent } = recordingMail();
+    const svc = svcOf(db, fakeMp(), fakeCustomers(), mail, new StorageService());
+    await assert.rejects(svc.attachReceipt(7, code, `receipts/${other}/11111111-1111-1111-1111-111111111111.pdf`), /inválido/);
+    await assert.rejects(svc.attachReceipt(7, code, `receipts/${code}/../../x.pdf`), /inválido/);
+    const r: any = await svc.attachReceipt(7, code, `receipts/${code}/11111111-1111-1111-1111-111111111111.pdf`);
+    assert.equal(r.transfer.receiptUploaded, true);
+    assert.ok(db.orders[0].receiptUploadedAt instanceof Date);
+    await mail.flush();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].to, 'contacto@auryx.test');
+    assert.match(sent[0].subject, /Comprobante subido/);
+  });
+});
+
+test('admin: confirmar transferencia = pagado una sola vez (un mail); rechazar comprobante extiende el plazo; cancelar', async () => {
+  const db = fakePrisma(products);
+  await withEnv({ ...TRANSFER_ENV, NOTIFY_EMAIL: 'contacto@auryx.test' }, async () => {
+    const { code } = await transferOrder(db);
+    const { code: mpCode } = await svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+    const { mail, sent } = recordingMail();
+    const svc = svcOf(db, fakeMp(), fakeCustomers(), mail);
+    const id = db.orders.find((o: any) => o.code === code).id;
+    const mpId = db.orders.find((o: any) => o.code === mpCode).id;
+
+    await assert.rejects(svc.adminPayment(mpId, 'confirmar'), /Solo se confirman/);
+    await assert.rejects(svc.adminPayment(id, 'rechazar_comprobante'), /no tiene un comprobante/);
+    await assert.rejects(svc.adminPayment(id, 'otra' as any), /inválida/);
+
+    db.orders[0].receiptKey = `receipts/${code}/a.pdf`;
+    db.orders[0].transferDeadline = new Date(Date.now() + 3600e3);
+    await svc.adminPayment(id, 'rechazar_comprobante');
+    assert.equal(db.orders[0].receiptKey, null);
+    assert.ok(db.orders[0].transferDeadline.getTime() >= Date.now() + 23.9 * 3600e3);
+    await mail.flush();
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].subject, /Revisá el comprobante/);
+
+    await Promise.all([svc.adminPayment(id, 'confirmar'), svc.adminPayment(id, 'confirmar')]);
+    assert.equal(db.orders[0].status, 'pagado');
+    assert.ok(db.orders[0].paidAt instanceof Date);
+    await mail.flush();
+    assert.equal(sent.filter((m) => /Pago confirmado/.test(m.subject)).length, 1);
+    await assert.rejects(svc.adminPayment(id, 'cancelar'), /pagado no se cancela/);
+
+    await svc.adminPayment(mpId, 'cancelar');
+    assert.equal(db.orders.find((o: any) => o.id === mpId).status, 'cancelado');
+  });
+});
+
+test('admin: filtro transferencias; paymentMethods; el webhook guarda paidAt', async () => {
+  const db = fakePrisma(products);
+  await withEnv({ ...TRANSFER_ENV, TRANSFER_DISCOUNT_PCT: '5' }, async () => {
+    await transferOrder(db);
+    const { code } = await svcOf(db).create(ana, { ...base, items: [{ productId: 1, qty: 1 }] });
+    const list = await svcOf(db).adminList('transferencias');
+    assert.deepEqual(list.map((o: any) => o.paymentMethod), ['transferencia']);
+    assert.deepEqual(svcOf(db).paymentMethods(), { mercadopago: true, transferencia: { enabled: true, discountPct: 5, deadlineHours: 72 } });
+    const svc = svcOf(db, fakeMp({ id: 9, status: 'approved', external_reference: code, transaction_amount: 100000, currency_id: 'ARS' }));
+    await svc.handlePaymentNotification('9');
+    assert.ok(db.orders.find((o: any) => o.code === code).paidAt instanceof Date);
+  });
+  await withEnv({ TRANSFER_ENABLED: undefined }, () =>
+    assert.deepEqual(svcOf(db).paymentMethods().transferencia, { enabled: false, discountPct: 0, deadlineHours: 72 }));
 });
 

@@ -77,6 +77,13 @@ enum OrderStatus {
   @@map("order_status_enum")
 }
 
+enum PaymentMethod {
+  mercadopago
+  transferencia
+
+  @@map("payment_method_enum")
+}
+
 enum FulfillmentStatus {
   pendiente
   preparando
@@ -142,6 +149,11 @@ model Order {
   fulfillmentStatus FulfillmentStatus @default(pendiente) @map("fulfillment_status")
   trackingNumber    String?           @map("tracking_number")
   paymentUrl        String?           @map("payment_url")
+  paymentMethod     PaymentMethod     @default(mercadopago) @map("payment_method")
+  transferDeadline  DateTime?         @map("transfer_deadline") @db.Timestamptz
+  receiptKey        String?           @map("receipt_key")
+  receiptUploadedAt DateTime?         @map("receipt_uploaded_at") @db.Timestamptz
+  paidAt            DateTime?         @map("paid_at") @db.Timestamptz
   createdAt         DateTime          @default(now()) @map("created_at")
   updatedAt         DateTime          @updatedAt @map("updated_at")
   items             OrderItem[]

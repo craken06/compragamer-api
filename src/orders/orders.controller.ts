@@ -6,7 +6,7 @@ import { FulfillmentStatus } from '@prisma/client';
 import { AdminKeyGuard } from '../common/admin-key.guard';
 import { RateLimiter } from '../common/rate-limit';
 import { CustomerGuard } from '../customers/customer.guard';
-import { AdminOrderFilter, CreateOrderRequest, OrdersService } from './orders.service';
+import { AdminOrderFilter, AdminPaymentAction, CreateOrderRequest, OrdersService } from './orders.service';
 import { MercadoPagoClient } from './mercadopago.client';
 import { ORDER_CODE_RE } from './order-code';
 
@@ -20,6 +20,7 @@ export class OrdersController {
   // cada notificación consulta el pago a MP: sin tope, una inundación agota el rate limit de MP de la cuenta.
   // Es amplio para no frenar nunca las notificaciones reales.
   private webhookLimiter = new RateLimiter(120, 60 * 1000, 'Demasiadas notificaciones.');
+  private uploadLimiter = new RateLimiter(30, 60 * 60 * 1000, 'Demasiadas subidas seguidas. Probá en un rato.');
 
   constructor(
     private readonly orders: OrdersService,
@@ -34,6 +35,33 @@ export class OrdersController {
     this.limiter.check(ip);
     this.customerLimiter.check(String(req.customer.id));
     return this.orders.create(req.customer, body ?? ({} as CreateOrderRequest));
+  }
+
+  // GET /payments/methods -> { mercadopago, transferencia: { enabled, discountPct, deadlineHours } }
+  @Get('payments/methods')
+  methods() {
+    return this.orders.paymentMethods();
+  }
+
+  // POST /orders/:code/receipt/upload-url { filename, size, contentType } -> { key, url, headers }
+  @Post('orders/:code/receipt/upload-url')
+  @UseGuards(CustomerGuard)
+  receiptUploadUrl(@Req() req: any, @Param('code') code: string, @Body() body: any, @Ip() ip: string) {
+    this.uploadLimiter.check(ip);
+    return this.orders.receiptUploadUrl(req.customer.id, this.codeOf(code), body ?? {});
+  }
+
+  // POST /orders/:code/receipt { key } -> pedido actualizado
+  @Post('orders/:code/receipt')
+  @UseGuards(CustomerGuard)
+  attachReceipt(@Req() req: any, @Param('code') code: string, @Body() body: any) {
+    return this.orders.attachReceipt(req.customer.id, this.codeOf(code), body?.key);
+  }
+
+  private codeOf(raw: string) {
+    const code = String(raw ?? '').trim().toUpperCase();
+    if (!ORDER_CODE_RE.test(code)) throw new NotFoundException('Pedido no encontrado');
+    return code;
   }
 
   // GET /me/orders -> pedidos del cliente, del más nuevo al más viejo
@@ -72,6 +100,20 @@ export class OrdersController {
   @UseGuards(AdminKeyGuard)
   setFulfillment(@Param('id', ParseIntPipe) id: number, @Body() body: { status: FulfillmentStatus; trackingNumber?: string }) {
     return this.orders.setFulfillment(id, body?.status, body?.trackingNumber);
+  }
+
+  // GET /admin/orders/:id/receipt -> { url } firmada (10 min)
+  @Get('admin/orders/:id/receipt')
+  @UseGuards(AdminKeyGuard)
+  receipt(@Param('id', ParseIntPipe) id: number) {
+    return this.orders.adminReceiptUrl(id);
+  }
+
+  // PATCH /admin/orders/:id/payment { action: confirmar | rechazar_comprobante | cancelar }
+  @Patch('admin/orders/:id/payment')
+  @UseGuards(AdminKeyGuard)
+  payment(@Param('id', ParseIntPipe) id: number, @Body() body: { action: AdminPaymentAction }) {
+    return this.orders.adminPayment(id, body?.action);
   }
 
   // POST /payments/webhook -> notificaciones de Mercado Pago (formato webhook v1 o IPN con ?topic=payment&id=)

@@ -224,3 +224,54 @@ export function fulfillmentCustomer(o: OrderMail, siteUrl: string): RenderedMail
   const text = [hello(o.customerName), intro, `Ver tu pedido: ${link}`, 'AURYX · auryx.com.ar'].join('\n\n');
   return { subject, html, text };
 }
+
+// ---------- transferencias ----------
+
+export interface BankMail { holder: string; cuit: string; bank: string; cbu: string; alias: string }
+
+const deadlineFmt = new Intl.DateTimeFormat('es-AR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/Argentina/Buenos_Aires' });
+const deadlineText = (d: Date | string | null | undefined) => (d ? `${deadlineFmt.format(new Date(d))} h` : 'a coordinar');
+
+const bankPairs = (b: BankMail, total: unknown): [string, string | null | undefined][] => [
+  ['Titular', b.holder], ['CUIT', b.cuit || null], ['Banco', b.bank || null], ['CBU/CVU', b.cbu || null], ['Alias', b.alias || null],
+  ['Monto exacto', money(total)],
+];
+
+/** Al cliente: pedido por transferencia creado, con los datos para pagar y el plazo. */
+export function transferCustomer(o: OrderMail, bank: BankMail, deadline: Date | string | null, siteUrl: string): RenderedMail {
+  const link = `${siteBase(siteUrl)}/pedido/${o.code}/`;
+  const subject = `Datos para transferir: pedido ${o.code}`;
+  const intro = `Recibimos tu pedido ${o.code}. Para confirmarlo, transferí el monto exacto antes del ${deadlineText(deadline)} y subí el comprobante desde la página del pedido.`;
+  const after = 'Cuando verifiquemos la transferencia te mandamos la confirmación. Si no se paga a tiempo, el pedido se cancela solo.';
+  const html = layout(subject, [
+    p(esc(hello(o.customerName))), p(esc(intro)), rows(bankPairs(bank, o.totalArs)), itemsHtml(o),
+    button(link, 'Subir el comprobante'), p(esc(after)),
+  ].join(''));
+  const text = [hello(o.customerName), intro, textRows(bankPairs(bank, o.totalArs)), itemsText(o), `Subí el comprobante: ${link}`, after, 'AURYX · auryx.com.ar'].join('\n\n');
+  return { subject, html, text };
+}
+
+/** Aviso a AURYX: pedido nuevo por transferencia, o comprobante subido (`receipt`). */
+export function transferNotice(o: OrderMail, kind: 'nuevo' | 'comprobante', siteUrl: string): RenderedMail {
+  const subject = kind === 'comprobante'
+    ? `Comprobante subido ${o.code} — revisar y confirmar (${money(o.totalArs)})`
+    : `Pedido por transferencia ${o.code} — esperando pago (${money(o.totalArs)})`;
+  const intro = kind === 'comprobante'
+    ? 'El cliente subió el comprobante. Verificá la acreditación en el banco y confirmá el pago desde el admin (Pedidos → Transferencias).'
+    : 'Pedido nuevo por transferencia. Todavía no hay comprobante.';
+  const data: [string, string | null | undefined][] = [['Cliente', o.customerName], ['Email', o.customerEmail], ['Teléfono', o.customerPhone ?? null]];
+  const admin = `${siteBase(siteUrl)}/admin/`;
+  const html = layout(subject, [p(esc(intro)), rows(data), itemsHtml(o), button(admin, 'Abrir el admin')].join(''), 'Aviso interno de auryx.com.ar');
+  const text = [intro, textRows(data), itemsText(o), `Admin: ${admin}`].join('\n\n');
+  return { subject, html, text };
+}
+
+/** Al cliente: el comprobante no se pudo verificar; tiene que subir otro. */
+export function receiptRejectedCustomer(o: OrderMail, deadline: Date | string | null, siteUrl: string): RenderedMail {
+  const link = `${siteBase(siteUrl)}/pedido/${o.code}/`;
+  const subject = `Revisá el comprobante del pedido ${o.code}`;
+  const intro = `No pudimos verificar la transferencia del pedido ${o.code} con el comprobante que subiste. Subí otro (o escribinos) antes del ${deadlineText(deadline)}.`;
+  const html = layout(subject, [p(esc(hello(o.customerName))), p(esc(intro)), button(link, 'Subir otro comprobante'), p(`<span style="color:${DIM};font-size:13px;">¿Dudas? Respondé este mail.</span>`)].join(''));
+  const text = [hello(o.customerName), intro, `Pedido: ${link}`, '¿Dudas? Respondé este mail.', 'AURYX · auryx.com.ar'].join('\n\n');
+  return { subject, html, text };
+}

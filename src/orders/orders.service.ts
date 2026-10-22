@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import {
+  BadRequestException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional, ServiceUnavailableException,
+} from '@nestjs/common';
 import { FulfillmentStatus, OrderStatus, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,6 +13,8 @@ import { assertFulfillment, fulfillmentData } from './fulfillment';
 import { INSTALLATION_MP_ID, INSTALLATION_NAME, INSTALLATION_PRODUCT_ID, INSTALLATION_RATE } from './installation';
 import { productTitle } from '../products/title';
 import { MailService } from '../mail/mail.service';
+import { RECEIPT_RULE, StorageService, UploadRequest, checkUpload } from '../storage/storage.service';
+import { PAYMENT_METHODS, PaymentMethod, TRANSFER_DISCOUNT_PRODUCT_ID, discountLabel, transferConfig } from './payment-methods';
 
 export interface CreateOrderRequest {
   items: { productId: number; qty: number }[];
@@ -19,12 +23,17 @@ export interface CreateOrderRequest {
   billing?: unknown; // { doc, name }, opcional
   saveDetails?: boolean; // guarda teléfono, dirección y facturación en la cuenta
   notes?: string;
-  mode?: 'pago' | 'cotizacion'; // cotizacion = se guarda el pedido sin cobrar
+  /** mercadopago (por defecto) o transferencia. Ya no hay pedidos "cotización": todo se paga online. */
+  paymentMethod?: PaymentMethod;
   /** equipos (de `items`) a los que se les pidió instalación y asesoría: se cobra INSTALLATION_RATE de su precio */
   installation?: { productId: number; qty: number }[];
 }
 
-export type AdminOrderFilter = 'para_preparar' | 'todos' | 'pendientes_pago' | 'entregados';
+export type AdminOrderFilter = 'para_preparar' | 'todos' | 'pendientes_pago' | 'transferencias' | 'entregados';
+export type AdminPaymentAction = 'confirmar' | 'rechazar_comprobante' | 'cancelar';
+
+const EXPIRY_SWEEP_MS = 60 * 60 * 1000;
+const REJECT_EXTENSION_MS = 24 * 60 * 60 * 1000; // al rechazar un comprobante el cliente tiene al menos 24 h más
 
 const MAX_ITEMS = 50;
 const MAX_QTY = 999; // unidades por producto en un pedido
@@ -35,8 +44,11 @@ const ADMIN_FILTERS: Record<AdminOrderFilter, Prisma.OrderWhereInput> = {
   para_preparar: { status: 'pagado', fulfillmentStatus: { not: 'entregado' } },
   todos: {},
   pendientes_pago: { status: 'pendiente_pago' },
+  transferencias: { status: 'pendiente_pago', paymentMethod: 'transferencia' },
   entregados: { fulfillmentStatus: 'entregado' },
 };
+
+const isPendingTransfer = (o: any) => o.paymentMethod === 'transferencia' && o.status === 'pendiente_pago';
 
 // Estados de pago de MP -> estado del pedido
 const MP_STATUS: Record<string, OrderStatus> = {
@@ -65,7 +77,13 @@ function toCustomerOrder(o: any) {
     billingName: o.billingName ?? null,
     notes: o.notes ?? null,
     totalArs: Number(o.totalArs),
-    paymentUrl: o.status === 'pendiente_pago' ? o.paymentUrl ?? null : null,
+    paymentMethod: o.paymentMethod ?? 'mercadopago',
+    paidAt: o.paidAt ?? null,
+    paymentUrl: o.status === 'pendiente_pago' && o.paymentMethod !== 'transferencia' ? o.paymentUrl ?? null : null,
+    // datos para transferir: solo mientras el pedido espera el pago (son los vigentes, no los del día del pedido)
+    transfer: isPendingTransfer(o)
+      ? { bank: transferConfig().bank, deadline: o.transferDeadline ?? null, receiptUploaded: !!o.receiptKey, receiptUploadedAt: o.receiptUploadedAt ?? null }
+      : null,
     items: (o.items ?? []).map((i: any) => ({
       productId: i.productId, productName: i.productName, quantity: i.quantity, unitPriceArs: Number(i.unitPriceArs),
     })),
@@ -73,8 +91,9 @@ function toCustomerOrder(o: any) {
 }
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OrdersService.name);
+  private sweepTimer?: NodeJS.Timeout;
 
   constructor(
     private prisma: PrismaService,
@@ -82,7 +101,44 @@ export class OrdersService {
     private mp: MercadoPagoClient,
     private customers: CustomersService,
     @Optional() private mail?: MailService,
+    @Optional() private storage?: StorageService,
   ) {}
+
+  /** Barrido de transferencias vencidas cada hora (además del chequeo al leer un pedido). */
+  onModuleInit() {
+    const t = transferConfig();
+    if (process.env.TRANSFER_ENABLED === 'true' && !t.enabled) {
+      this.logger.warn('TRANSFER_ENABLED=true pero TRANSFER_BANK falta o está incompleto: la transferencia queda deshabilitada.');
+    }
+    this.sweepTimer = setInterval(() => { this.expireTransfers().catch((err) => this.logger.warn(`Barrido de transferencias: ${err?.message}`)); }, EXPIRY_SWEEP_MS);
+    this.sweepTimer.unref?.();
+  }
+
+  onModuleDestroy() {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+  }
+
+  /** GET /payments/methods: qué puede elegir el cliente (sin datos bancarios: esos van con el pedido). */
+  paymentMethods() {
+    const t = transferConfig();
+    return {
+      mercadopago: this.mp.enabled,
+      transferencia: { enabled: t.enabled, discountPct: t.enabled ? t.discountPct : 0, deadlineHours: t.deadlineHours },
+    };
+  }
+
+  /**
+   * Cancela las transferencias vencidas SIN comprobante. Con comprobante nunca se cancelan solas:
+   * decide el admin (puede haberse pagado a último momento).
+   */
+  async expireTransfers(now = new Date()) {
+    const { count } = await this.prisma.order.updateMany({
+      where: { paymentMethod: 'transferencia', status: 'pendiente_pago', receiptKey: null, transferDeadline: { lt: now } },
+      data: { status: 'cancelado' },
+    });
+    if (count) this.logger.log(`Transferencias vencidas canceladas: ${count}`);
+    return count;
+  }
 
   /**
    * Crea el pedido de un cliente con sesión, con precios calculados en el servidor (nunca los que manda el navegador).
@@ -94,6 +150,15 @@ export class OrdersService {
     const email = String(customer.email ?? '').trim().toLowerCase().slice(0, 160);
     const lines = Array.isArray(req?.items) ? req.items : [];
     if (!lines.length || lines.length > MAX_ITEMS) throw new BadRequestException(`El pedido tiene que tener entre 1 y ${MAX_ITEMS} productos.`);
+
+    // medio de pago: todo se cobra online; ya no se guardan cotizaciones
+    if ((req as any)?.mode === 'cotizacion') throw new BadRequestException('Los pedidos se pagan online: elegí un medio de pago.');
+    const transfer = transferConfig();
+    if (!this.mp.enabled && !transfer.enabled) throw new ServiceUnavailableException('El pago online no está disponible en este momento. Probá más tarde o escribinos por WhatsApp.');
+    const payMethod: PaymentMethod = req?.paymentMethod ?? 'mercadopago';
+    if (!PAYMENT_METHODS.includes(payMethod)) throw new BadRequestException('Medio de pago inválido.');
+    if (payMethod === 'mercadopago' && !this.mp.enabled) throw new BadRequestException('Mercado Pago no está disponible en este momento: elegí otro medio de pago.');
+    if (payMethod === 'transferencia' && !transfer.enabled) throw new BadRequestException('La transferencia bancaria no está disponible: pagá con Mercado Pago.');
 
     const qtyById = new Map<number, number>();
     for (const l of lines) {
@@ -146,9 +211,13 @@ export class OrdersService {
     if (installBase > 0) {
       items.push({ productId: INSTALLATION_PRODUCT_ID, productName: INSTALLATION_NAME, quantity: 1, unitPriceArs: Math.round(installBase * INSTALLATION_RATE * 100) / 100 });
     }
+    if (payMethod === 'transferencia' && transfer.discountPct > 0) {
+      const subtotal = items.reduce((s, i) => s + i.unitPriceArs * i.quantity, 0);
+      items.push({ productId: TRANSFER_DISCOUNT_PRODUCT_ID, productName: discountLabel(transfer.discountPct), quantity: 1, unitPriceArs: -Math.round(subtotal * transfer.discountPct) / 100 });
+    }
     const total = Math.round(items.reduce((s, i) => s + i.unitPriceArs * i.quantity, 0) * 100) / 100;
+    const transferDeadline = payMethod === 'transferencia' ? new Date(Date.now() + transfer.deadlineHours * 3600 * 1000) : null;
 
-    const quote = req.mode === 'cotizacion' || !this.mp.enabled;
     const order = await withUniqueCode((code) => this.prisma.order.create({
       data: {
         publicId: randomUUID(), code, customerId: customer.id,
@@ -158,7 +227,7 @@ export class OrdersService {
         ...(address ? { shippingAddress: address as unknown as Prisma.InputJsonObject } : {}),
         billingDoc: billing?.doc ?? null, billingName: billing?.name ?? null,
         notes: req.notes ? String(req.notes).slice(0, 1000) : null,
-        status: quote ? 'cotizacion' : 'pendiente_pago',
+        status: 'pendiente_pago', paymentMethod: payMethod, transferDeadline,
         totalArs: new Prisma.Decimal(total), usdArsRate: new Prisma.Decimal(usdArs),
         items: { create: items.map((i) => ({ ...i, unitPriceArs: new Prisma.Decimal(i.unitPriceArs) })) },
       },
@@ -180,10 +249,13 @@ export class OrdersService {
       }
     };
 
-    if (quote) {
+    if (payMethod === 'transferencia') {
       await saveDetails();
-      this.mail?.orderReceived({ ...order, items }, 'cotizacion');
-      return { code, status: order.status, totalArs: total, paymentUrl: null };
+      this.mail?.transferOrderCreated({ ...order, items }, transfer.bank!, transferDeadline);
+      return {
+        code, status: order.status, totalArs: total, paymentUrl: null,
+        transfer: { bank: transfer.bank, deadline: transferDeadline, receiptUploaded: false, receiptUploadedAt: null },
+      };
     }
 
     const frontend = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
@@ -204,10 +276,97 @@ export class OrdersService {
       await saveDetails();
       return { code, status: order.status, totalArs: total, paymentUrl: pref.init_point };
     } catch (err) {
-      // el pedido queda guardado como cotización para no perderlo
-      await this.prisma.order.update({ where: { id: order.id }, data: { status: 'cotizacion' } });
+      // sin link de pago el pedido no sirve: queda cancelado (visible en el admin) y el cliente reintenta
+      await this.prisma.order.update({ where: { id: order.id }, data: { status: 'cancelado' } });
       throw err;
     }
+  }
+
+  /** Pedido del cliente por código, o el mismo 404 si no existe o es de otro. */
+  private async ownOrder(customerId: number, code: string) {
+    const order = await this.prisma.order.findUnique({ where: { code }, include: { items: true } });
+    if (!order || order.customerId !== customerId) throw new NotFoundException(NOT_FOUND);
+    return order;
+  }
+
+  /** Transferencia todavía pagable: pendiente y dentro del plazo. */
+  private assertPayableTransfer(order: any) {
+    if (!isPendingTransfer(order)) throw new BadRequestException('Este pedido no espera una transferencia.');
+    if (order.transferDeadline && new Date(order.transferDeadline).getTime() < Date.now() && !order.receiptKey) {
+      throw new BadRequestException('El plazo para transferir venció: hacé el pedido de nuevo.');
+    }
+  }
+
+  /** POST /orders/:code/receipt/upload-url: URL firmada para subir el comprobante a R2. */
+  async receiptUploadUrl(customerId: number, code: string, file: UploadRequest) {
+    const order = await this.ownOrder(customerId, code);
+    this.assertPayableTransfer(order);
+    if (!this.storage?.enabled) throw new ServiceUnavailableException('Todavía no se pueden subir comprobantes: mandalo respondiendo el mail del pedido.');
+    const f = checkUpload(file, RECEIPT_RULE);
+    return this.storage.signUpload('private', this.storage.newKey(`receipts/${order.code}`, f.ext), f);
+  }
+
+  /** POST /orders/:code/receipt { key }: registra el comprobante subido (la clave tiene que ser de este pedido). */
+  async attachReceipt(customerId: number, code: string, key: unknown) {
+    const order = await this.ownOrder(customerId, code);
+    this.assertPayableTransfer(order);
+    const k = String(key ?? '');
+    const prefix = `receipts/${order.code}/`;
+    if (!k.startsWith(prefix) || !/^[0-9a-f-]{36}\.[a-z0-9]{1,5}$/.test(k.slice(prefix.length))) {
+      throw new BadRequestException('Comprobante inválido: subilo de nuevo.');
+    }
+    const previous = order.receiptKey;
+    const updated = await this.prisma.order.update({
+      where: { id: order.id }, data: { receiptKey: k, receiptUploadedAt: new Date() }, include: { items: true },
+    });
+    if (previous && previous !== k) void this.storage?.remove('private', previous);
+    this.mail?.receiptUploaded(updated);
+    return toCustomerOrder(updated);
+  }
+
+  /** GET /admin/orders/:id/receipt: descarga del comprobante (10 min). */
+  async adminReceiptUrl(orderId: number) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException(NOT_FOUND);
+    if (!order.receiptKey) throw new NotFoundException('Este pedido no tiene comprobante.');
+    if (!this.storage?.enabled) throw new ServiceUnavailableException('Falta configurar R2 para ver comprobantes.');
+    const ext = order.receiptKey.split('.').pop();
+    return { url: this.storage.signDownload(order.receiptKey, `comprobante-${order.code}.${ext}`) };
+  }
+
+  /**
+   * PATCH /admin/orders/:id/payment: confirmar una transferencia, rechazar su comprobante o cancelar
+   * un pedido sin pagar. Confirmar es condicional (como el webhook): dos clics = un solo mail.
+   */
+  async adminPayment(orderId: number, action: AdminPaymentAction) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order) throw new NotFoundException(NOT_FOUND);
+    const include = { items: true, customer: { select: { id: true, name: true } } };
+
+    if (action === 'confirmar') {
+      // un pedido vencido (cancelado) se puede confirmar igual: la plata puede haber llegado tarde
+      // ya pagado (doble clic): no es un error, no repite el mail
+      if (order.paymentMethod !== 'transferencia' || !['pendiente_pago', 'cancelado', 'pagado'].includes(order.status)) {
+        throw new BadRequestException('Solo se confirman a mano los pedidos por transferencia sin pagar.');
+      }
+      const { count } = await this.prisma.order.updateMany({
+        where: { id: order.id, status: { not: 'pagado' } }, data: { status: 'pagado', paidAt: new Date() },
+      });
+      if (count === 1) await this.notifyPaid(order.id);
+    } else if (action === 'rechazar_comprobante') {
+      if (!isPendingTransfer(order) || !order.receiptKey) throw new BadRequestException('Este pedido no tiene un comprobante para rechazar.');
+      const minDeadline = Date.now() + REJECT_EXTENSION_MS;
+      const deadline = new Date(Math.max(minDeadline, order.transferDeadline ? new Date(order.transferDeadline).getTime() : 0));
+      await this.prisma.order.update({ where: { id: order.id }, data: { receiptKey: null, receiptUploadedAt: null, transferDeadline: deadline } });
+      void this.storage?.remove('private', order.receiptKey);
+      this.mail?.receiptRejected(order, deadline);
+    } else if (action === 'cancelar') {
+      if (order.status === 'pagado') throw new BadRequestException('Un pedido pagado no se cancela desde acá: hacé la devolución en Mercado Pago o por transferencia.');
+      await this.prisma.order.update({ where: { id: order.id }, data: { status: 'cancelado' } });
+    } else {
+      throw new BadRequestException('Acción de pago inválida.');
+    }
+    return this.prisma.order.findUnique({ where: { id: order.id }, include });
   }
 
   /** Estado público de un pedido viejo (sin cuenta) por su UUID. No expone datos del cliente. */
@@ -223,8 +382,12 @@ export class OrdersService {
 
   /** Detalle de un pedido del cliente. Si no existe o es de otro, el mismo 404 (no revela que existe). */
   async findForCustomer(customerId: number, code: string) {
-    const order = await this.prisma.order.findUnique({ where: { code }, include: { items: true } });
-    if (!order || order.customerId !== customerId) throw new NotFoundException(NOT_FOUND);
+    let order = await this.ownOrder(customerId, code);
+    // vencimiento al leer: no depende del barrido horario
+    if (isPendingTransfer(order) && !order.receiptKey && order.transferDeadline && new Date(order.transferDeadline).getTime() < Date.now()) {
+      await this.expireTransfers();
+      order = await this.ownOrder(customerId, code);
+    }
     return toCustomerOrder(order);
   }
 
@@ -290,8 +453,9 @@ export class OrdersService {
     // un pedido ya pagado no vuelve atrás por una notificación vieja
     if (order.status === 'pagado' && status !== 'cancelado') status = 'pagado';
 
-    const data = { status, mpPaymentId: String(payment.id), mpStatus: payment.status };
+    const data: Prisma.OrderUpdateManyMutationInput = { status, mpPaymentId: String(payment.id), mpStatus: payment.status };
     if (status === 'pagado' && order.status !== 'pagado') {
+      data.paidAt = new Date();
       // condicional: si MP manda dos notificaciones a la vez, solo una pasa el pedido a pagado y manda los mails
       const { count } = await this.prisma.order.updateMany({ where: { id: order.id, status: { not: 'pagado' } }, data });
       if (count === 1) await this.notifyPaid(order.id);
