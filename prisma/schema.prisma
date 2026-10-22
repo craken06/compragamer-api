@@ -108,6 +108,7 @@ model Customer {
   lastLoginAt    DateTime           @default(now()) @map("last_login_at") @db.Timestamptz
   identities     CustomerIdentity[]
   orders         Order[]
+  enrollments    Enrollment[]
 
   @@map("customers")
 }
@@ -195,4 +196,231 @@ model ProductImage {
   order     Int     @default(0) @map("order")
 
   @@map("product_images")
+}
+
+// ---------------------------------------------------------------- cursos (Auryx Academia)
+// Ver docs/superpowers/specs/2026-10-22-cursos-design.md. Migración: 2026-10-22_cursos.sql
+
+enum CourseStatus {
+  borrador
+  publicado
+  archivado
+
+  @@map("course_status_enum")
+}
+
+enum CourseLevel {
+  inicial
+  intermedio
+  avanzado
+
+  @@map("course_level_enum")
+}
+
+enum LessonKind {
+  video
+  lectura
+  prueba
+  tarea
+
+  @@map("lesson_kind_enum")
+}
+
+enum EnrollmentStatus {
+  pendiente_pago
+  activa
+  cancelada
+
+  @@map("enrollment_status_enum")
+}
+
+enum SubmissionStatus {
+  entregada
+  aprobada
+  a_rehacer
+
+  @@map("submission_status_enum")
+}
+
+model Course {
+  id                 Int            @id @default(autoincrement())
+  slug               String         @unique
+  title              String
+  subtitle           String         @default("")
+  description        String         @default("")
+  coverUrl           String?        @map("cover_url")
+  level              CourseLevel    @default(inicial)
+  durationHours      Decimal        @default(0) @map("duration_hours") @db.Decimal(6, 1)
+  priceArs           Decimal        @default(0) @map("price_ars") @db.Decimal(12, 2) // 0 = gratis
+  status             CourseStatus   @default(borrador)
+  sequential         Boolean        @default(false) // true = cada lección se abre al completar la anterior
+  instructorName     String         @default("") @map("instructor_name")
+  instructorBio      String         @default("") @map("instructor_bio")
+  instructorPhotoUrl String?        @map("instructor_photo_url")
+  outcomes           Json           @default("[]") // lista de textos: qué vas a aprender
+  requirements       Json           @default("[]")
+  position           Int            @default(0) // orden en el catálogo
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  modules            CourseModule[]
+  enrollments        Enrollment[]
+
+  @@map("courses")
+}
+
+model CourseModule {
+  id          Int      @id @default(autoincrement())
+  courseId    Int      @map("course_id")
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title       String
+  description String   @default("")
+  position    Int      @default(0)
+  lessons     Lesson[]
+
+  @@index([courseId])
+  @@map("course_modules")
+}
+
+model Lesson {
+  id            Int                    @id @default(autoincrement())
+  moduleId      Int                    @map("module_id")
+  module        CourseModule           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  kind          LessonKind             @default(video)
+  title         String
+  body          String                 @default("") // texto con formato simple (ver el sitio: courseTextHTML)
+  videoProvider String?                @map("video_provider") // bunny | youtube
+  videoId       String?                @map("video_id")
+  durationMin   Int                    @default(0) @map("duration_min")
+  isPreview     Boolean                @default(false) @map("is_preview") // se ve sin inscripción
+  isOptional    Boolean                @default(false) @map("is_optional") // no cuenta para el certificado
+  position      Int                    @default(0)
+  passPct       Int                    @default(70) @map("pass_pct") // prueba: nota mínima
+  maxAttempts   Int?                   @map("max_attempts") // prueba: null = sin límite
+  instructions  String                 @default("") // tarea: consigna
+  resources     LessonResource[]
+  questions     QuizQuestion[]
+  progress      LessonProgress[]
+  attempts      QuizAttempt[]
+  submissions   AssignmentSubmission[]
+
+  @@index([moduleId])
+  @@map("lessons")
+}
+
+model LessonResource {
+  id       Int     @id @default(autoincrement())
+  lessonId Int     @map("lesson_id")
+  lesson   Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  kind     String  @default("archivo") // archivo | link
+  title    String
+  fileKey  String? @map("file_key") // R2 privado
+  fileName String? @map("file_name")
+  fileSize Int?    @map("file_size")
+  url      String?
+  position Int     @default(0)
+
+  @@index([lessonId])
+  @@map("lesson_resources")
+}
+
+model QuizQuestion {
+  id          Int    @id @default(autoincrement())
+  lessonId    Int    @map("lesson_id")
+  lesson      Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  kind        String @default("unica") // unica | multiple | vf
+  prompt      String
+  options     Json   @default("[]") // [{ id, text, correct }]: correct nunca sale al alumno
+  explanation String @default("")
+  position    Int    @default(0)
+
+  @@index([lessonId])
+  @@map("quiz_questions")
+}
+
+model Enrollment {
+  id             Int                    @id @default(autoincrement())
+  code           String                 @unique // CU-XXXXXX (external_reference en Mercado Pago)
+  courseId       Int                    @map("course_id")
+  course         Course                 @relation(fields: [courseId], references: [id])
+  customerId     Int                    @map("customer_id")
+  customer       Customer               @relation(fields: [customerId], references: [id])
+  status         EnrollmentStatus       @default(pendiente_pago)
+  priceArs       Decimal                @default(0) @map("price_ars") @db.Decimal(12, 2)
+  source         String                 @default("compra") // compra | gratis | manual
+  mpPreferenceId String?                @map("mp_preference_id")
+  mpPaymentId    String?                @map("mp_payment_id")
+  mpStatus       String?                @map("mp_status")
+  paymentUrl     String?                @map("payment_url")
+  paidAt         DateTime?              @map("paid_at") @db.Timestamptz
+  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  completedAt    DateTime?              @map("completed_at") @db.Timestamptz
+  progress       LessonProgress[]
+  attempts       QuizAttempt[]
+  submissions    AssignmentSubmission[]
+  certificate    Certificate?
+
+  @@unique([courseId, customerId])
+  @@index([customerId])
+  @@map("enrollments")
+}
+
+model LessonProgress {
+  enrollmentId Int        @map("enrollment_id")
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lessonId     Int        @map("lesson_id")
+  lesson       Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  completedAt  DateTime   @default(now()) @map("completed_at") @db.Timestamptz
+
+  @@id([enrollmentId, lessonId])
+  @@map("lesson_progress")
+}
+
+model QuizAttempt {
+  id           Int        @id @default(autoincrement())
+  enrollmentId Int        @map("enrollment_id")
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lessonId     Int        @map("lesson_id")
+  lesson       Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  answers      Json
+  scorePct     Int        @map("score_pct")
+  passed       Boolean
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([enrollmentId, lessonId])
+  @@map("quiz_attempts")
+}
+
+model AssignmentSubmission {
+  id           Int              @id @default(autoincrement())
+  enrollmentId Int              @map("enrollment_id")
+  enrollment   Enrollment       @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lessonId     Int              @map("lesson_id")
+  lesson       Lesson           @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  text         String           @default("")
+  fileKey      String?          @map("file_key")
+  fileName     String?          @map("file_name")
+  fileSize     Int?             @map("file_size")
+  status       SubmissionStatus @default(entregada)
+  feedback     String           @default("")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  reviewedAt   DateTime?        @map("reviewed_at") @db.Timestamptz
+
+  @@index([enrollmentId, lessonId])
+  @@index([status])
+  @@map("assignment_submissions")
+}
+
+model Certificate {
+  id                Int        @id @default(autoincrement())
+  code              String     @unique // CERT-XXXXXX
+  enrollmentId      Int        @unique @map("enrollment_id")
+  enrollment        Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  nameOnCertificate String     @map("name_on_certificate")
+  courseTitle       String     @map("course_title") // copia: si el curso cambia, el certificado no
+  durationHours     Decimal    @map("duration_hours") @db.Decimal(6, 1)
+  issuedAt          DateTime   @default(now()) @map("issued_at") @db.Timestamptz
+  revokedAt         DateTime?  @map("revoked_at") @db.Timestamptz
+  revokeReason      String?    @map("revoke_reason")
+
+  @@map("certificates")
 }

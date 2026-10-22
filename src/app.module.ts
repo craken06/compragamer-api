@@ -11,11 +11,13 @@ import { ContactModule } from './contact/contact.module';
 import { CustomersModule } from './customers/customers.module';
 import { SizerModule } from './sizer/sizer.module';
 import { HealthModule } from './health/health.module';
+import { CoursesModule } from './courses/courses.module';
 
 @Module({
   imports: [
     PrismaModule, CategoriesModule, ProductsModule, ExchangeRateModule,
     CompatibilityModule, CalculatorsModule, AuthModule, OrdersModule, ContactModule, CustomersModule, SizerModule, HealthModule,
+    CoursesModule,
   ],
 })
 export class AppModule {}

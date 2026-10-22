@@ -6,11 +6,12 @@ import { StorageModule } from '../storage/storage.module';
 import { MercadoPagoClient } from './mercadopago.client';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { PaymentRouter } from './payment-router';
 
 @Module({
   imports: [ExchangeRateModule, CustomersModule, MailModule, StorageModule],
   controllers: [OrdersController],
-  providers: [OrdersService, MercadoPagoClient],
-  exports: [OrdersService, MercadoPagoClient],
+  providers: [OrdersService, MercadoPagoClient, PaymentRouter],
+  exports: [MercadoPagoClient, PaymentRouter],
 })
 export class OrdersModule {}

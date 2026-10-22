@@ -16,7 +16,9 @@ const { generateOrderCode } = require('../src/orders/order-code');
 
 const APPLY = process.argv.includes('--apply');
 const DIR = path.join(__dirname, '..', 'prisma', 'manual-migrations');
-const NEW_TABLES = ['compatibility_rules', 'orders', 'order_items', 'contact_messages', 'customers', 'customer_identities'];
+const NEW_TABLES = ['compatibility_rules', 'orders', 'order_items', 'contact_messages', 'customers', 'customer_identities',
+  'courses', 'course_modules', 'lessons', 'lesson_resources', 'quiz_questions', 'enrollments', 'lesson_progress',
+  'quiz_attempts', 'assignment_submissions', 'certificates'];
 
 // Campos que se suman al spec_schema de "proteccion" para que el motor pueda validar las DC.
 const PROTECCION_PROPS = {

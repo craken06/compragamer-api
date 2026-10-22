@@ -275,3 +275,65 @@ export function receiptRejectedCustomer(o: OrderMail, deadline: Date | string | 
   const text = [hello(o.customerName), intro, `Pedido: ${link}`, '¿Dudas? Respondé este mail.', 'AURYX · auryx.com.ar'].join('\n\n');
   return { subject, html, text };
 }
+
+// ---------- cursos ----------
+
+export interface CourseMail {
+  customerName: string;
+  customerEmail: string;
+  courseTitle: string;
+  slug: string;
+  code?: string; // CU-… o CERT-…
+  priceArs?: number | string | { toString(): string } | null;
+}
+
+/** Mail simple al alumno: saludo, texto y un botón. */
+function studentMail(c: CourseMail, subject: string, intro: string, href: string, label: string): RenderedMail {
+  const html = layout(subject, [p(esc(hello(c.customerName))), p(esc(intro)), button(href, label), p(`<span style="color:${DIM};font-size:13px;">¿Dudas? Respondé este mail.</span>`)].join(''));
+  const text = [hello(c.customerName), intro, `${label}: ${href}`, '¿Dudas? Respondé este mail.', 'AURYX · auryx.com.ar'].join('\n\n');
+  return { subject, html, text };
+}
+
+const classroom = (c: CourseMail, siteUrl: string) => `${siteBase(siteUrl)}/cursos/${c.slug}/aula/`;
+
+export function enrollmentCustomer(c: CourseMail, siteUrl: string): RenderedMail {
+  return studentMail(c, `Ya estás inscripto: ${c.courseTitle}`.slice(0, 150),
+    `Tu inscripción al curso "${c.courseTitle}" está confirmada${c.code ? ` (${c.code})` : ''}. Ya podés empezar: el aula queda disponible en tu cuenta, a tu ritmo.`,
+    classroom(c, siteUrl), 'Ir al aula');
+}
+
+export function enrollmentNotice(c: CourseMail, siteUrl: string): RenderedMail {
+  const paid = Number(c.priceArs) > 0;
+  const subject = `${paid ? 'Curso vendido' : 'Inscripción gratis'}: ${c.courseTitle}${paid ? ` (${money(c.priceArs)})` : ''}`.slice(0, 150);
+  const data: [string, string | null | undefined][] = [['Alumno', c.customerName], ['Email', c.customerEmail], ['Curso', c.courseTitle], ['Inscripción', c.code ?? null]];
+  const admin = `${siteBase(siteUrl)}/admin/`;
+  const html = layout(subject, [rows(data), button(admin, 'Abrir el admin')].join(''), 'Aviso interno de auryx.com.ar');
+  return { subject, html, text: [textRows(data), `Admin: ${admin}`].join('\n\n') };
+}
+
+export function submissionNotice(c: CourseMail, lessonTitle: string, siteUrl: string): RenderedMail {
+  const subject = `Tarea entregada: ${lessonTitle} — ${c.customerName}`.slice(0, 150);
+  const data: [string, string | null | undefined][] = [['Alumno', c.customerName], ['Email', c.customerEmail], ['Curso', c.courseTitle], ['Tarea', lessonTitle]];
+  const admin = `${siteBase(siteUrl)}/admin/`;
+  const html = layout(subject, [p('Hay una tarea nueva para corregir (Admin → Entregas).'), rows(data), button(admin, 'Corregir')].join(''), 'Aviso interno de auryx.com.ar');
+  return { subject, html, text: ['Hay una tarea nueva para corregir (Admin → Entregas).', textRows(data), `Admin: ${admin}`].join('\n\n') };
+}
+
+export function submissionReviewed(c: CourseMail, lessonTitle: string, approved: boolean, feedback: string, siteUrl: string): RenderedMail {
+  const subject = approved ? `Tarea aprobada: ${lessonTitle}` : `Revisá tu tarea: ${lessonTitle}`;
+  const intro = approved
+    ? `Aprobamos tu tarea "${lessonTitle}" del curso "${c.courseTitle}". ¡Seguí así!`
+    : `Revisamos tu tarea "${lessonTitle}" del curso "${c.courseTitle}" y hay que rehacerla. Mirá el comentario y volvé a entregarla desde el aula.`;
+  const link = classroom(c, siteUrl);
+  const html = layout(subject, [
+    p(esc(hello(c.customerName))), p(esc(intro)), feedback ? pre(feedback) : '', button(link, 'Ir al aula'),
+  ].join(''));
+  const text = [hello(c.customerName), intro, feedback ? `Comentario:\n${feedback}` : '', `Aula: ${link}`, 'AURYX · auryx.com.ar'].filter(Boolean).join('\n\n');
+  return { subject: subject.slice(0, 150), html, text };
+}
+
+export function certificateIssued(c: CourseMail, siteUrl: string): RenderedMail {
+  return studentMail(c, `Tu certificado: ${c.courseTitle}`.slice(0, 150),
+    `¡Felicitaciones! Terminaste el curso "${c.courseTitle}". Tu certificado ${c.code ?? ''} ya está disponible y cualquiera puede verificarlo con el código.`,
+    `${siteBase(siteUrl)}/certificados/${c.code ?? ''}/`, 'Ver mi certificado');
+}

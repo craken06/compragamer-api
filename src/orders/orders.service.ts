@@ -15,6 +15,7 @@ import { productTitle } from '../products/title';
 import { MailService } from '../mail/mail.service';
 import { RECEIPT_RULE, StorageService, UploadRequest, checkUpload } from '../storage/storage.service';
 import { PAYMENT_METHODS, PaymentMethod, TRANSFER_DISCOUNT_PRODUCT_ID, discountLabel, transferConfig } from './payment-methods';
+import { PaymentRouter } from './payment-router';
 
 export interface CreateOrderRequest {
   items: { productId: number; qty: number }[];
@@ -102,6 +103,7 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     private customers: CustomersService,
     @Optional() private mail?: MailService,
     @Optional() private storage?: StorageService,
+    @Optional() private router?: PaymentRouter,
   ) {}
 
   /** Barrido de transferencias vencidas cada hora (además del chequeo al leer un pedido). */
@@ -437,6 +439,8 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
     const payment = await this.mp.getPayment(paymentId);
     const ref = payment.external_reference;
     if (!ref) return { ignored: 'sin external_reference' };
+    const other = this.router?.find(ref); // p. ej. CU- = inscripción a un curso
+    if (other) return other(payment);
     const order =
       (await this.prisma.order.findUnique({ where: { code: ref } })) ??
       (await this.prisma.order.findUnique({ where: { publicId: ref } }));

@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { MailClient, OutgoingMail } from './mail.client';
 import {
-  BankMail, ContactMail, OrderMail, OrderMailKind, contactAck, contactNotice, fulfillmentCustomer, orderCustomer, orderNotice,
-  receiptRejectedCustomer, transferCustomer, transferNotice,
+  BankMail, ContactMail, CourseMail, OrderMail, OrderMailKind, certificateIssued, contactAck, contactNotice, enrollmentCustomer,
+  enrollmentNotice, fulfillmentCustomer, orderCustomer, orderNotice, receiptRejectedCustomer, submissionNotice, submissionReviewed,
+  transferCustomer, transferNotice,
 } from './templates';
 
 /*
@@ -96,5 +97,28 @@ export class MailService {
   fulfillmentChanged(o: OrderMail): void {
     const m = fulfillmentCustomer(o, this.site);
     if (m) this.dispatch([{ to: o.customerEmail, ...m, ...(this.notifyTo ? { replyTo: this.notifyTo } : {}) }]);
+  }
+
+  // ---------- cursos ----------
+
+  private toStudent(c: CourseMail, m: { subject: string; html: string; text: string }): OutgoingMail {
+    return { to: c.customerEmail, ...m, ...(this.notifyTo ? { replyTo: this.notifyTo } : {}) };
+  }
+
+  /** Inscripción activa (gratis, pagada o manual). */
+  enrollmentConfirmed(c: CourseMail, notify = true): void {
+    this.dispatch([this.toStudent(c, enrollmentCustomer(c, this.site)), ...(notify ? this.notice(enrollmentNotice(c, this.site), c.customerEmail) : [])]);
+  }
+
+  submissionReceived(c: CourseMail, lessonTitle: string): void {
+    this.dispatch(this.notice(submissionNotice(c, lessonTitle, this.site), c.customerEmail));
+  }
+
+  submissionReviewed(c: CourseMail, lessonTitle: string, approved: boolean, feedback: string): void {
+    this.dispatch([this.toStudent(c, submissionReviewed(c, lessonTitle, approved, feedback, this.site))]);
+  }
+
+  certificateIssued(c: CourseMail): void {
+    this.dispatch([this.toStudent(c, certificateIssued(c, this.site))]);
   }
 }

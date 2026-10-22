@@ -4,11 +4,16 @@ import { randomInt } from 'crypto';
 export const ORDER_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 export const ORDER_CODE_RE = /^AX-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/;
 
-/** Código de pedido `AX-XXXXXX`, al azar (no correlativo, para no revelar el volumen de ventas). */
-export function generateOrderCode(rand: (max: number) => number = (max) => randomInt(max)): string {
-  let out = 'AX-';
+/** Código `<PREFIJO>-XXXXXX` al azar con el mismo alfabeto (inscripciones CU-, certificados CERT-). */
+export function generateCode(prefix: string, rand: (max: number) => number = (max) => randomInt(max)): string {
+  let out = `${prefix}-`;
   for (let i = 0; i < 6; i++) out += ORDER_CODE_ALPHABET[rand(ORDER_CODE_ALPHABET.length)];
   return out;
+}
+
+/** Código de pedido `AX-XXXXXX`, al azar (no correlativo, para no revelar el volumen de ventas). */
+export function generateOrderCode(rand: (max: number) => number = (max) => randomInt(max)): string {
+  return generateCode('AX', rand);
 }
 
 /** ¿Es un choque de la restricción única sobre `code`? (target puede ser array o string) */
